@@ -1,0 +1,34 @@
+services:
+  voyah-monitor:
+    build: .
+    container_name: voyah-monitor
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    command: ["voyah-monitor", "bot"]
+
+  voyah-login:
+    build: .
+    container_name: voyah-monitor-login
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    stdin_open: true
+    tty: true
+    command: ["voyah-monitor", "login"]
+    profiles:
+      - login
+
+  voyah-fetch:
+    build: .
+    container_name: voyah-monitor-fetch
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    command: ["voyah-monitor", "fetch"]
+    profiles:
+      - fetch
