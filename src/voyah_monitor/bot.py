@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Callable
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from voyah_monitor.client import VoyahClient
 from voyah_monitor.config import Settings
 from voyah_monitor.storage import TelemetryStorage
-from voyah_monitor.telemetry import format_status, normalize_payload
+from voyah_monitor.telemetry import format_status, dashboard_items_to_telemetry
+from voyah_monitor.session_manager import SessionExpiredError
+from voyah_monitor.voyah_api import VoyahReadOnlyApi
 
 logger = logging.getLogger(__name__)
 
@@ -49,24 +49,25 @@ def _render_battery_chart(storage: TelemetryStorage, vehicle_key: str | None = N
 
 
 async def _collect_and_store(settings: Settings, storage: TelemetryStorage) -> str:
-    with VoyahClient(settings) as client:
-        payloads = client.fetch_all_allowed()
+    try:
+        telemetries = await asyncio.to_thread(_fetch_and_save, settings, storage)
+    except SessionExpiredError as exc:
+        return str(exc)
+    except Exception as exc:
+        return f"Не удалось получить телеметрию: {exc}"
 
-    saved = 0
-    errors: list[str] = []
-    for item in payloads:
-        if "error" in item:
-            errors.append(f"{item['method']} {item['path']}: {item['error']}")
-            continue
-        for telemetry in normalize_payload(item["data"]):
-            storage.save_snapshot(telemetry)
-            saved += 1
+    if telemetries:
+        return f"Сохранено записей телеметрии: {len(telemetries)}"
+    return "Автомобили не найдены."
 
-    if saved:
-        return f"Сохранено записей телеметрии: {saved}"
-    if errors:
-        return "Не удалось получить телеметрию:\n" + "\n".join(errors[:5])
-    return "Нет разрешенных endpoint-ов. Сначала выполните login и настройте allow-list."
+
+def _fetch_and_save(settings: Settings, storage: TelemetryStorage) -> list:
+    with VoyahReadOnlyApi(settings) as api:
+        items = api.fetch_dashboard_status()
+    telemetries = dashboard_items_to_telemetry(items)
+    for telemetry in telemetries:
+        storage.save_snapshot(telemetry)
+    return telemetries
 
 
 def create_dispatcher(settings: Settings, storage: TelemetryStorage) -> Dispatcher:
@@ -79,11 +80,12 @@ def create_dispatcher(settings: Settings, storage: TelemetryStorage) -> Dispatch
             return
         await message.answer(
             "Команды:\n"
-            "/status — текущее состояние\n"
-            "/collect — обновить данные с VOYAH\n"
+            "/status — актуальное состояние (запрос к VOYAH)\n"
+            "/collect — сохранить снимок в базу\n"
             "/mileage — график дневных пробегов\n"
             "/battery — история заряда\n"
-            "/history — последние сохраненные данные"
+            "/history — последний сохранённый снимок\n\n"
+            f"Фоновое обновление: каждые {settings.telegram_poll_interval // 3600} ч."
         )
 
     @dp.message(Command("status"))
@@ -91,11 +93,19 @@ def create_dispatcher(settings: Settings, storage: TelemetryStorage) -> Dispatch
         if not _authorized(settings, message.from_user.id):
             await message.answer("Доступ запрещен.")
             return
-        latest = storage.latest_snapshot()
-        if not latest:
-            await message.answer("Данных пока нет. Выполните /collect после login.")
+        await message.answer("Запрашиваю актуальные данные (read-only)...")
+        try:
+            telemetries = await asyncio.to_thread(_fetch_and_save, settings, storage)
+        except SessionExpiredError as exc:
+            await message.answer(str(exc))
             return
-        await message.answer(format_status(latest))
+        except Exception as exc:
+            await message.answer(f"Не удалось получить телеметрию: {exc}")
+            return
+        if not telemetries:
+            await message.answer("Автомобили не найдены.")
+            return
+        await message.answer("\n\n---\n\n".join(format_status(item) for item in telemetries))
 
     @dp.message(Command("collect"))
     async def cmd_collect(message: Message) -> None:
@@ -155,12 +165,14 @@ async def run_bot(settings: Settings) -> None:
     dp = create_dispatcher(settings, storage)
 
     async def periodic_collect() -> None:
+        interval_hours = settings.telegram_poll_interval / 3600
+        logger.info("Background telemetry collection every %.1f h", interval_hours)
         while True:
+            await asyncio.sleep(settings.telegram_poll_interval)
             try:
-                await asyncio.to_thread(_collect_and_store, settings, storage)
+                await asyncio.to_thread(_fetch_and_save, settings, storage)
             except Exception:
                 logger.exception("Periodic telemetry collection failed")
-            await asyncio.sleep(settings.telegram_poll_interval)
 
     logger.info("Starting Telegram bot...")
     asyncio.create_task(periodic_collect())

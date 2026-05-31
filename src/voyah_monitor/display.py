@@ -33,6 +33,10 @@ def format_snapshot_record(record: SnapshotRecord) -> str:
         ("Скорость, км/ч", telemetry.speed_kmh),
         ("Широта", telemetry.latitude),
         ("Долгота", telemetry.longitude),
+        ("Курс, °", telemetry.course_deg),
+        ("SOH, %", telemetry.soh_percent),
+        ("На связи", telemetry.is_online),
+        ("Передача геопозиции", telemetry.location_sharing),
         ("Статус", telemetry.status),
         ("Зарядка", telemetry.is_charging),
     ):

@@ -3,8 +3,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-import httpx
-
 from voyah_monitor.client import ReadOnlyViolationError
 from voyah_monitor.config import Settings
 from voyah_monitor.session_manager import SessionManager
@@ -18,20 +16,27 @@ SAFE_POST_PATHS = frozenset(
     }
 )
 
-BLOCKED_PATH_PARTS = (
-    "/tbox/",
-    "/telemetry-commands",
-    "/telemetry/",
-    "ownerSuggest",
-    "/owner",
-    "block_driver",
-    "unblock_driver",
-    "toggle",
-    "/command",
-    "/drivers",
-    "/check-configuration",
-    "/update-configuration",
-    "/automations/",
+BLOCKED_GET_PATTERNS = (
+    re.compile(r"/telemetry-commands"),
+    re.compile(r"/client-bff-service/telemetry/"),
+    re.compile(r"ownerSuggest"),
+    re.compile(r"/owner$"),
+    re.compile(r"/drivers(?!WithOwner)"),
+    re.compile(r"block_driver"),
+    re.compile(r"unblock_driver"),
+    re.compile(r"/toggle"),
+    re.compile(r"/command"),
+    re.compile(r"/check-configuration"),
+    re.compile(r"/update-configuration"),
+    re.compile(r"/automations/"),
+    re.compile(r"/tbox/[a-f0-9]{24}/(?!info$)"),
+)
+
+ALLOWED_GET_PATTERNS = (
+    re.compile(r"^/car-service/car/v2/[a-f0-9]{24}$"),
+    re.compile(r"^/car-service/car/v2/[a-f0-9]{24}/driversWithOwner$"),
+    re.compile(r"^/car-service/maintenance/[a-f0-9]{24}/overview$"),
+    re.compile(r"^/car-service/tbox/[a-f0-9]{24}/info$"),
 )
 
 
@@ -60,17 +65,10 @@ class VoyahReadOnlyApi:
 
     @staticmethod
     def _assert_safe_get_path(path: str) -> None:
-        lowered = path.lower()
-        if any(part in lowered for part in BLOCKED_PATH_PARTS):
+        if any(pattern.match(path) for pattern in ALLOWED_GET_PATTERNS):
+            return
+        if any(pattern.search(path) for pattern in BLOCKED_GET_PATTERNS):
             raise ReadOnlyViolationError(f"Blocked read path: {path}")
-
-        if re.match(r"^/car-service/car/v2/[a-f0-9]{24}$", path):
-            return
-        if re.match(r"^/car-service/car/v2/[a-f0-9]{24}/driversWithOwner$", path):
-            return
-        if re.match(r"^/car-service/maintenance/[a-f0-9]{24}/overview$", path):
-            return
-
         raise ReadOnlyViolationError(f"GET {path} is not allowed for status command.")
 
     @staticmethod
@@ -113,6 +111,13 @@ class VoyahReadOnlyApi:
             raise RuntimeError("Unexpected maintenance overview response.")
         return payload
 
+    def get_tbox_info(self, car_id: str) -> dict[str, Any]:
+        car_id = self._validate_car_id(car_id)
+        payload = self._get_json(f"/car-service/tbox/{car_id}/info")
+        if not isinstance(payload, dict):
+            raise RuntimeError("Unexpected tbox info response.")
+        return payload
+
     def fetch_dashboard_status(self) -> list[dict[str, Any]]:
         search = self.search_cars(add_sensors=True)
         geo = self.search_geo()
@@ -139,6 +144,7 @@ class VoyahReadOnlyApi:
                 item["detail"] = self.get_car_by_id(str(car_id))
             except Exception as exc:
                 item["detail_error"] = str(exc)
+                item["detail"] = {}
             try:
                 item["drivers"] = self.get_car_drivers(str(car_id))
             except Exception as exc:
@@ -147,6 +153,10 @@ class VoyahReadOnlyApi:
                 item["maintenance"] = self.get_maintenance_overview(str(car_id))
             except Exception as exc:
                 item["maintenance_error"] = str(exc)
+            try:
+                item["tbox"] = self.get_tbox_info(str(car_id))
+            except Exception as exc:
+                item["tbox_error"] = str(exc)
             results.append(item)
 
         return results

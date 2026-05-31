@@ -75,6 +75,8 @@ voyah-monitor bot
 
 Команды бота: `/status`, `/collect`, `/mileage`, `/battery`, `/history`.
 
+Фоновый сбор — раз в 4 часа (`TELEGRAM_POLL_INTERVAL=14400`). `/status` и `/collect` запрашивают данные сразу по запросу.
+
 ## Docker
 
 ```bash

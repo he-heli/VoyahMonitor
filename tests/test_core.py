@@ -9,7 +9,7 @@ from voyah_monitor.network_inspector import CapturedRequest, NetworkCapture, cla
 from voyah_monitor.display import format_database_status
 from voyah_monitor.session import save_session_dict
 from voyah_monitor.storage import TelemetryStorage
-from voyah_monitor.telemetry import normalize_record
+from voyah_monitor.telemetry import dashboard_items_to_telemetry, normalize_record
 from voyah_monitor.vehicle_status import format_dashboard_status
 from voyah_monitor.voyah_api import VoyahReadOnlyApi
 
@@ -157,7 +157,13 @@ def test_status_shows_all_table_rows(tmp_path) -> None:
 
 def test_voyah_api_blocks_control_paths() -> None:
     with pytest.raises(ReadOnlyViolationError):
-        VoyahReadOnlyApi._assert_safe_get_path("/car-service/tbox/69aab8fe2f8bbd597e85ebf2/info")
+        VoyahReadOnlyApi._assert_safe_get_path("/car-service/tbox/69aab8fe2f8bbd597e85ebf2/toggle-location")
+    VoyahReadOnlyApi._assert_safe_get_path(
+        "/car-service/car/v2/69aab8fe2f8bbd597e85ebf2/driversWithOwner"
+    )
+    VoyahReadOnlyApi._assert_safe_get_path(
+        "/car-service/tbox/69aab8fe2f8bbd597e85ebf2/info"
+    )
 
 
 def test_format_dashboard_status_matches_site_sections() -> None:
@@ -166,49 +172,125 @@ def test_format_dashboard_status_matches_site_sections() -> None:
             "_id": "69aab8fe2f8bbd597e85ebf2",
             "vin": "TESTVIN123",
             "licensePlate": "A123BC",
+            "locationStatus": True,
             "lastSensorRequest": "2026-05-31T18:45:00.000Z",
             "carModel": {"displayName": "ФРИ / FREE", "modname": "H97y", "name": "Free"},
-            "liveSensors": {
-                "batteryPercentage": 71,
-                "12VBatteryVoltage": 13,
+            "sensors": {
+                "battery": 71,
+                "v12": 13,
                 "odometer": 1451,
-                "remainsMileage": 512,
+                "remain": 512,
+                "lastSensorsRecieved": "2026-05-31T18:45:00.000Z",
             },
         },
         "geo": {"lat": 55.75, "lon": 48.74, "course": 21, "battery": 71},
+        "tbox": {
+            "isOnline": True,
+            "isCentralLockingOn": True,
+            "sensors": {
+                "chip": {"title": "Доступен"},
+                "positionData": {"speed": 0, "lat": 55.75, "lon": 48.74, "course": 21},
+                "sensorsData": {
+                    "fuelPercentage": 64,
+                    "remainsMileageFuel": 224,
+                    "batteryPercentage": 71,
+                    "remainsMileage": 113,
+                    "coolantTemp": 72,
+                    "batteryTemp": 24,
+                    "12VBatteryVoltage": 12.99,
+                    "odometer": 1451,
+                    "outsideTemp": 18,
+                    "trunkStatus": 0,
+                    "centralLockingStatus": 0,
+                    "climateFanSpeed": 0,
+                },
+            },
+            "preparation_script": {"running": False},
+        },
         "detail": {
             "vin": "TESTVIN123",
             "licensePlate": "A123BC",
             "imsiSim": "9254583477",
             "lastSensorRequest": "2026-05-31T18:45:00.000Z",
             "carModel": {"displayName": "ФРИ / FREE", "modname": "H97y", "color": "Бurgунди"},
-            "liveSensors": {
-                "fuelPercentage": 64,
-                "remainsMileageFuel": 224,
-                "batteryPercentage": 71,
-                "remainsMileage": 113,
-                "coolantTemp": 72,
-                "batteryTemp": 24,
-                "12VBatteryVoltage": 13,
-                "odometer": 1451,
-                "outsideTemp": 18,
+            "sensors": {
+                "sensorsData": {
+                    "fuelPercentage": 64,
+                    "remainsMileageFuel": 224,
+                    "batteryTemp": 24,
+                    "coolantTemp": 72,
+                    "outsideTemp": 18,
+                    "inBoardTemp": 20,
+                }
             },
+            "liveSensors": {"soh": 100},
         },
-        "drivers": {
-            "owner": {"firstName": "", "lastName": "", "phone": "+79800311181"},
-        },
+        "drivers": [
+            {
+                "_id": "1",
+                "firstName": "Без имени",
+                "lastName": "",
+                "phone": "79600311181",
+                "kind": "owner",
+            }
+        ],
         "maintenance": {
-            "nextMaintenanceText": "Нет данных о предыдущем ТО",
-            "historyCount": 0,
+            "next": {"label": "Нет данных о предыдущем ТО"},
+            "historyTotal": 0,
+            "favDealers": [],
+            "servicingDealers": [],
+            "bookingList": [],
         },
     }
     output = format_dashboard_status([item])
     assert "Таблица (как на сайте)" in output
     assert "Заряд тяговой батареи, %" in output
-    assert "Карточка автомобиля" in output
-    assert "Климат" not in output
-    assert "Температура на улице, °C" in output
+    assert "Батарея 12V" in output
+    assert "Скорость" in output
+    assert "Актуальность сенсоров" in output
+    assert "Сводка (верх карточки)" in output
+    assert "Топливо, %" in output
+    assert "Доступен" in output
+    assert "Управление (только чтение)" in output
+    assert "Об автомобиле" in output
+    assert "Климат контроль" in output
+    assert "На улице, °C" in output
     assert "Доступы" in output
+    assert "+7 (960) 031-11-81" in output
     assert "Техническое обслуживание" in output
-    assert "71" in output
+    assert "Нет данных о предыдущем ТО" in output
     assert "1451" in output
+    assert "SOH, %: 100" in output
+    assert "На связи: да" in output
+    assert "Широта: 55.75" in output
+    assert "Курс: 21" in output
+    assert "Передача геопозиции: да" in output
+
+
+def test_dashboard_items_to_telemetry_extracts_extended_fields() -> None:
+    item = {
+        "table": {
+            "_id": "69aab8fe2f8bbd597e85ebf2",
+            "vin": "TESTVIN123",
+            "locationStatus": True,
+            "carModel": {"displayName": "ФРИ / FREE"},
+            "sensors": {"battery": 71, "odometer": 1451, "remain": 113},
+        },
+        "geo": {"lat": 55.75, "lon": 48.74, "course": 21},
+        "detail": {"liveSensors": {"soh": 100}},
+        "tbox": {
+            "isOnline": True,
+            "sensors": {
+                "chip": {"title": "Доступен"},
+                "positionData": {"lat": 55.75, "lon": 48.74, "course": 21, "speed": 0},
+            },
+        },
+    }
+    telemetry = dashboard_items_to_telemetry([item])[0]
+    assert telemetry.soh_percent == 100.0
+    assert telemetry.is_online is True
+    assert telemetry.latitude == 55.75
+    assert telemetry.longitude == 48.74
+    assert telemetry.course_deg == 21.0
+    assert telemetry.location_sharing is True
+    assert telemetry.status == "Доступен"

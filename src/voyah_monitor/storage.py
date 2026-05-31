@@ -56,6 +56,10 @@ class TelemetryStorage:
                     speed_kmh REAL,
                     latitude REAL,
                     longitude REAL,
+                    course_deg REAL,
+                    soh_percent REAL,
+                    is_online INTEGER,
+                    location_sharing INTEGER,
                     status TEXT,
                     is_charging INTEGER,
                     raw_json TEXT NOT NULL
@@ -74,6 +78,25 @@ class TelemetryStorage:
                 );
                 """
             )
+            self._ensure_columns(
+                conn,
+                "telemetry_snapshots",
+                {
+                    "course_deg": "REAL",
+                    "soh_percent": "REAL",
+                    "is_online": "INTEGER",
+                    "location_sharing": "INTEGER",
+                },
+            )
+
+    @staticmethod
+    def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+        existing = {
+            row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        for name, definition in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
     @staticmethod
     def vehicle_key(telemetry: VehicleTelemetry) -> str:
@@ -87,8 +110,9 @@ class TelemetryStorage:
                 INSERT INTO telemetry_snapshots (
                     captured_at, vehicle_key, vehicle_id, vin, name,
                     odometer_km, battery_percent, range_km, speed_kmh,
-                    latitude, longitude, status, is_charging, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    latitude, longitude, course_deg, soh_percent, is_online,
+                    location_sharing, status, is_charging, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     telemetry.captured_at.isoformat(),
@@ -102,6 +126,14 @@ class TelemetryStorage:
                     telemetry.speed_kmh,
                     telemetry.latitude,
                     telemetry.longitude,
+                    telemetry.course_deg,
+                    telemetry.soh_percent,
+                    1 if telemetry.is_online else 0 if telemetry.is_online is not None else None,
+                    1
+                    if telemetry.location_sharing
+                    else 0
+                    if telemetry.location_sharing is not None
+                    else None,
                     telemetry.status,
                     1 if telemetry.is_charging else 0 if telemetry.is_charging is not None else None,
                     json.dumps(telemetry.raw, ensure_ascii=False),
@@ -158,6 +190,12 @@ class TelemetryStorage:
             speed_kmh=row["speed_kmh"],
             latitude=row["latitude"],
             longitude=row["longitude"],
+            course_deg=row["course_deg"] if "course_deg" in row.keys() else None,
+            soh_percent=row["soh_percent"] if "soh_percent" in row.keys() else None,
+            is_online=bool(row["is_online"]) if "is_online" in row.keys() and row["is_online"] is not None else None,
+            location_sharing=bool(row["location_sharing"])
+            if "location_sharing" in row.keys() and row["location_sharing"] is not None
+            else None,
             status=row["status"],
             is_charging=bool(row["is_charging"]) if row["is_charging"] is not None else None,
             raw=json.loads(row["raw_json"]),

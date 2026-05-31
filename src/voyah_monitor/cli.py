@@ -7,12 +7,11 @@ import sys
 
 from voyah_monitor.auth_login import run_interactive_login
 from voyah_monitor.bot import run_bot
-from voyah_monitor.client import VoyahClient
 from voyah_monitor.config import Settings, get_settings
 from voyah_monitor.network_inspector import load_network_capture, suggest_allowed_paths
 from voyah_monitor.session import session_exists
 from voyah_monitor.storage import TelemetryStorage
-from voyah_monitor.telemetry import format_status, normalize_payload
+from voyah_monitor.telemetry import format_status, dashboard_items_to_telemetry
 from voyah_monitor.vehicle_status import format_dashboard_status
 from voyah_monitor.session_manager import SessionExpiredError
 from voyah_monitor.voyah_api import VoyahReadOnlyApi
@@ -53,23 +52,22 @@ def cmd_fetch(settings: Settings) -> int:
 
     storage = TelemetryStorage(settings.voyah_db_path)
     try:
-        with VoyahClient(settings) as client:
-            results = client.fetch_all_allowed()
+        with VoyahReadOnlyApi(settings) as api:
+            items = api.fetch_dashboard_status()
     except SessionExpiredError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    except Exception as exc:
+        print(f"Failed to fetch dashboard status: {_session_error_message(exc)}", file=sys.stderr)
+        return 1
 
+    telemetry_items = dashboard_items_to_telemetry(items)
     saved = 0
-    for item in results:
-        if "error" in item:
-            print(f"ERROR {item['method']} {item['path']}: {item['error']}", file=sys.stderr)
-            continue
-        telemetry_items = normalize_payload(item["data"])
-        for telemetry in telemetry_items:
-            storage.save_snapshot(telemetry)
-            saved += 1
-            print(format_status(telemetry))
-            print("---")
+    for telemetry in telemetry_items:
+        storage.save_snapshot(telemetry)
+        saved += 1
+        print(format_status(telemetry))
+        print("---")
 
     print(f"Saved snapshots: {saved}")
     return 0 if saved else 1

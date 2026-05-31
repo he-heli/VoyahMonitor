@@ -18,6 +18,10 @@ class VehicleTelemetry(BaseModel):
     speed_kmh: float | None = None
     latitude: float | None = None
     longitude: float | None = None
+    course_deg: float | None = None
+    soh_percent: float | None = None
+    is_online: bool | None = None
+    location_sharing: bool | None = None
     status: str | None = None
     is_charging: bool | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
@@ -134,4 +138,20 @@ def format_status(telemetry: VehicleTelemetry) -> str:
         lines.append("Зарядка: да" if telemetry.is_charging else "Зарядка: нет")
     if telemetry.latitude is not None and telemetry.longitude is not None:
         lines.append(f"Координаты: {telemetry.latitude:.5f}, {telemetry.longitude:.5f}")
+    if telemetry.course_deg is not None:
+        lines.append(f"Курс: {telemetry.course_deg:g}°")
+    if telemetry.soh_percent is not None:
+        lines.append(f"SOH: {telemetry.soh_percent:g}%")
+    if telemetry.is_online is not None:
+        lines.append("На связи: да" if telemetry.is_online else "На связи: нет")
+    if telemetry.location_sharing is not None:
+        lines.append(
+            "Передача геопозиции: да" if telemetry.location_sharing else "Передача геопозиции: нет"
+        )
     return "\n".join(lines)
+
+
+def dashboard_items_to_telemetry(items: list[dict[str, Any]]) -> list[VehicleTelemetry]:
+    from voyah_monitor.vehicle_status import dashboard_item_to_telemetry
+
+    return [dashboard_item_to_telemetry(item) for item in items if isinstance(item, dict)]
