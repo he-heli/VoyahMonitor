@@ -7,6 +7,7 @@ import pytest
 from voyah_monitor.client import ReadOnlyViolationError, VoyahClient
 from voyah_monitor.network_inspector import CapturedRequest, NetworkCapture, classify_request, suggest_allowed_paths
 from voyah_monitor.display import format_database_status
+from voyah_monitor.scheduling import next_poll_delay_seconds
 from voyah_monitor.session import save_session_dict
 from voyah_monitor.storage import TelemetryStorage
 from voyah_monitor.telemetry import dashboard_items_to_telemetry, normalize_record
@@ -294,3 +295,12 @@ def test_dashboard_items_to_telemetry_extracts_extended_fields() -> None:
     assert telemetry.course_deg == 21.0
     assert telemetry.location_sharing is True
     assert telemetry.status == "Доступен"
+
+
+def test_next_poll_delay_seconds_varies_within_jitter() -> None:
+    base = 14400
+    jitter = 0.25
+    delays = [next_poll_delay_seconds(base, jitter) for _ in range(50)]
+    assert min(delays) >= base * (1 - jitter)
+    assert max(delays) <= base * (1 + jitter)
+    assert len(set(delays)) > 1

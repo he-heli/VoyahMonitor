@@ -10,6 +10,7 @@ from aiogram.types import Message
 from voyah_monitor.config import Settings
 from voyah_monitor.storage import TelemetryStorage
 from voyah_monitor.telemetry import format_status, dashboard_items_to_telemetry
+from voyah_monitor.scheduling import next_poll_delay_seconds
 from voyah_monitor.session_manager import SessionExpiredError
 from voyah_monitor.voyah_api import VoyahReadOnlyApi
 
@@ -85,7 +86,8 @@ def create_dispatcher(settings: Settings, storage: TelemetryStorage) -> Dispatch
             "/mileage — график дневных пробегов\n"
             "/battery — история заряда\n"
             "/history — последний сохранённый снимок\n\n"
-            f"Фоновое обновление: каждые {settings.telegram_poll_interval // 3600} ч."
+            f"Фоновое обновление: ~каждые {settings.telegram_poll_interval // 3600} ч "
+            f"(±{int(settings.telegram_poll_jitter * 100)}%)"
         )
 
     @dp.message(Command("status"))
@@ -165,10 +167,17 @@ async def run_bot(settings: Settings) -> None:
     dp = create_dispatcher(settings, storage)
 
     async def periodic_collect() -> None:
-        interval_hours = settings.telegram_poll_interval / 3600
-        logger.info("Background telemetry collection every %.1f h", interval_hours)
+        base = settings.telegram_poll_interval
+        jitter = settings.telegram_poll_jitter
+        logger.info(
+            "Background telemetry collection ~every %.1f h (±%.0f%%)",
+            base / 3600,
+            jitter * 100,
+        )
         while True:
-            await asyncio.sleep(settings.telegram_poll_interval)
+            delay = next_poll_delay_seconds(base, jitter)
+            logger.info("Next background collect in %.0f min", delay / 60)
+            await asyncio.sleep(delay)
             try:
                 await asyncio.to_thread(_fetch_and_save, settings, storage)
             except Exception:

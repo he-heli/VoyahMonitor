@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_allowed_user_ids: str = Field(default="", alias="TELEGRAM_ALLOWED_USER_IDS")
     telegram_poll_interval: int = Field(default=14400, alias="TELEGRAM_POLL_INTERVAL")
+    telegram_poll_jitter: float = Field(default=0.25, alias="TELEGRAM_POLL_JITTER")
 
     @field_validator("voyah_base_url")
     @classmethod
