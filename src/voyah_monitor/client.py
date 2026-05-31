@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 
 import httpx
 
 from voyah_monitor.config import Settings
 from voyah_monitor.network_inspector import load_network_capture, suggest_allowed_paths
-from voyah_monitor.session import cookies_from_session, load_session, local_storage_from_session
+from voyah_monitor.session_manager import SessionManager
 
 MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -23,19 +23,11 @@ class VoyahClient:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.session = load_session(settings.voyah_session_path)
+        self.session_manager = SessionManager(settings)
         self._allowed_get = set(settings.allowed_get_paths)
         self._allowed_post = set(settings.allowed_post_paths)
         self._bootstrap_allowed_paths()
-
-        headers = self._build_headers()
-        self._client = httpx.Client(
-            base_url=settings.voyah_base_url,
-            headers=headers,
-            cookies=cookies_from_session(self.session),
-            timeout=30.0,
-            follow_redirects=True,
-        )
+        self._client = self.session_manager.build_client()
 
     def _bootstrap_allowed_paths(self) -> None:
         if self._allowed_get or self._allowed_post:
@@ -46,22 +38,6 @@ class VoyahClient:
         get_paths, post_paths = suggest_allowed_paths(capture)
         self._allowed_get.update(get_paths)
         self._allowed_post.update(post_paths)
-
-    def _build_headers(self) -> dict[str, str]:
-        headers = {
-            "Accept": "application/json, text/plain, */*",
-            "User-Agent": "VoyahMonitor/0.1 (read-only)",
-        }
-        storage = local_storage_from_session(self.session, self.settings.voyah_base_url)
-        for key in ("token", "accessToken", "access_token", "authToken", "authorization"):
-            if key in storage:
-                value = storage[key]
-                if key.lower() == "authorization" or value.lower().startswith("bearer "):
-                    headers["Authorization"] = value
-                else:
-                    headers["Authorization"] = f"Bearer {value}"
-                break
-        return headers
 
     def close(self) -> None:
         self._client.close()
@@ -112,15 +88,16 @@ class VoyahClient:
 
     def get_json(self, path: str, **kwargs: Any) -> Any:
         self._assert_allowed("GET", path)
-        response = self._client.get(path, **kwargs)
-        response.raise_for_status()
-        return response.json()
+        return self.session_manager.request_json(self._client, "GET", path)
 
     def post_json(self, path: str, json_body: dict[str, Any] | None = None, **kwargs: Any) -> Any:
         self._assert_allowed("POST", path)
-        response = self._client.post(path, json=json_body, **kwargs)
-        response.raise_for_status()
-        return response.json()
+        return self.session_manager.request_json(
+            self._client,
+            "POST",
+            path,
+            json_body=json_body or {},
+        )
 
     def fetch_all_allowed(self) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
@@ -143,7 +120,7 @@ def extract_telemetry_candidates(payload: Any) -> list[dict[str, Any]]:
     """Walk JSON and collect dicts that look like vehicle telemetry records."""
     candidates: list[dict[str, Any]] = []
     telemetry_keys = {
-        "odometer", "mileage", "soc", "battery", "latitude", "longitude",
+        "odometer", "mileage", "soc", "battery", "latitude", "longitude", "lat", "lon",
         "speed", "vin", "vehicle", "car", "fuel", "range", "temperature",
         "charging", "status", "location",
     }

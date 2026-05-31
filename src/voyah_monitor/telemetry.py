@@ -58,21 +58,23 @@ def _to_bool(value: Any) -> bool | None:
 
 
 def normalize_record(record: dict[str, Any]) -> VehicleTelemetry:
-    vehicle_id = _first_match(record, "vehicleId", "vehicle_id", "id", "carId", "car_id")
+    vehicle_id = _first_match(record, "vehicleId", "vehicle_id", "id", "carId", "car_id", "_id")
     vin = _first_match(record, "vin", "VIN")
-    name = _first_match(record, "name", "title", "model", "plate", "licensePlate")
+    name = _first_match(record, "name", "title", "model", "plate", "licensePlate", "displayName")
+    if not name and isinstance(record.get("carModel"), dict):
+        model = record["carModel"]
+        name = model.get("displayName") or model.get("name")
 
     odometer = _to_float(
         _first_match(record, "odometer", "mileage", "totalMileage", "total_mileage", "km")
     )
+    lat = _to_float(_first_match(record, "latitude", "lat"))
+    lon = _to_float(_first_match(record, "longitude", "lng", "lon"))
     battery = _to_float(
         _first_match(record, "soc", "battery", "batteryLevel", "battery_percent", "charge")
     )
     range_km = _to_float(_first_match(record, "range", "remainingRange", "range_km"))
-    speed = _to_float(_first_match(record, "speed", "speedKmh", "speed_kmh"))
-
-    lat = _to_float(_first_match(record, "latitude", "lat"))
-    lon = _to_float(_first_match(record, "longitude", "lng", "lon"))
+    speed = _to_float(_first_match(record, "speed", "speedKmh", "speed_kmh", "course"))
 
     status = _first_match(record, "status", "state", "vehicleStatus")
     charging = _to_bool(_first_match(record, "isCharging", "charging", "chargeStatus"))

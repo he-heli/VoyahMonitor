@@ -24,6 +24,10 @@ cp .env.example .env
 
 ### 1. Авторизация
 
+После login сессия сохраняется в `data/session.json`. Access token живёт ~10 минут,
+но клиент автоматически обновляет его через `refreshToken` (~90 дней).
+SMS-login нужен только при первой настройке или когда refresh token истечёт.
+
 ```bash
 voyah-monitor login
 ```
@@ -43,14 +47,23 @@ voyah-monitor inspect
 
 Скопируйте предложенные `VOYAH_ALLOWED_GET_PATHS` / `VOYAH_ALLOWED_POST_PATHS` в `.env`.
 
-### 3. Сбор телеметрии
+### 3. Статус автомобиля (как на сайте)
+
+```bash
+voyah-monitor status
+```
+
+Команда read-only: забирает поля из таблицы и карточки автомобиля с сайта VOYAH.
+Не использует блок «Управление», не меняет владельца и не добавляет автомобили.
+
+### 4. Сбор телеметрии в локальную базу
 
 ```bash
 voyah-monitor fetch
 voyah-monitor status
 ```
 
-### 4. Telegram-бот
+### 5. Telegram-бот
 
 ```bash
 # .env
@@ -118,4 +131,4 @@ gh repo create VoyahMonitor --public --source=. --remote=origin --push
 
 - SmartCaptcha проходится только вручную.
 - Точные API endpoint-ы зависят от версии кабинета VOYAH и определяются после login через network capture.
-- Если сессия истекла, повторите `voyah-monitor login`.
+- Если refresh token истёк, повторите `voyah-monitor login`.

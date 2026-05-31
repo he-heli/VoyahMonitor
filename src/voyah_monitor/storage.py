@@ -10,6 +10,13 @@ from voyah_monitor.telemetry import VehicleTelemetry
 
 
 @dataclass
+class SnapshotRecord:
+    id: int
+    vehicle_key: str
+    telemetry: VehicleTelemetry
+
+
+@dataclass
 class DailyMileage:
     day: date
     vehicle_key: str
@@ -139,6 +146,52 @@ class TelemetryStorage:
             (end_odometer, distance, day, vehicle_key),
         )
 
+    def _row_to_telemetry(self, row: sqlite3.Row) -> VehicleTelemetry:
+        return VehicleTelemetry(
+            captured_at=datetime.fromisoformat(row["captured_at"]),
+            vehicle_id=row["vehicle_id"],
+            vin=row["vin"],
+            name=row["name"],
+            odometer_km=row["odometer_km"],
+            battery_percent=row["battery_percent"],
+            range_km=row["range_km"],
+            speed_kmh=row["speed_kmh"],
+            latitude=row["latitude"],
+            longitude=row["longitude"],
+            status=row["status"],
+            is_charging=bool(row["is_charging"]) if row["is_charging"] is not None else None,
+            raw=json.loads(row["raw_json"]),
+        )
+
+    def all_snapshots(self, vehicle_key: str | None = None) -> list[SnapshotRecord]:
+        query = """
+            SELECT * FROM telemetry_snapshots
+            {where}
+            ORDER BY captured_at ASC, id ASC
+        """
+        params: tuple[object, ...] = ()
+        where = ""
+        if vehicle_key:
+            where = "WHERE vehicle_key = ?"
+            params = (vehicle_key,)
+
+        with self._connect() as conn:
+            rows = conn.execute(query.format(where=where), params).fetchall()
+
+        return [
+            SnapshotRecord(
+                id=row["id"],
+                vehicle_key=row["vehicle_key"],
+                telemetry=self._row_to_telemetry(row),
+            )
+            for row in rows
+        ]
+
+    def snapshot_count(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count FROM telemetry_snapshots").fetchone()
+            return int(row["count"]) if row else 0
+
     def latest_snapshot(self, vehicle_key: str | None = None) -> VehicleTelemetry | None:
         query = """
             SELECT * FROM telemetry_snapshots
@@ -156,21 +209,38 @@ class TelemetryStorage:
             row = conn.execute(query.format(where=where), params).fetchone()
             if not row:
                 return None
-            return VehicleTelemetry(
-                captured_at=datetime.fromisoformat(row["captured_at"]),
-                vehicle_id=row["vehicle_id"],
-                vin=row["vin"],
-                name=row["name"],
-                odometer_km=row["odometer_km"],
-                battery_percent=row["battery_percent"],
-                range_km=row["range_km"],
-                speed_kmh=row["speed_kmh"],
-                latitude=row["latitude"],
-                longitude=row["longitude"],
-                status=row["status"],
-                is_charging=bool(row["is_charging"]) if row["is_charging"] is not None else None,
-                raw=json.loads(row["raw_json"]),
+            return self._row_to_telemetry(row)
+
+    def all_daily_mileage(self, vehicle_key: str | None = None) -> list[DailyMileage]:
+        query = """
+            SELECT day, vehicle_key, start_odometer_km, end_odometer_km, distance_km
+            FROM daily_mileage
+            {where}
+            ORDER BY day ASC, vehicle_key ASC
+        """
+        params: tuple[object, ...] = ()
+        where = ""
+        if vehicle_key:
+            where = "WHERE vehicle_key = ?"
+            params = (vehicle_key,)
+
+        with self._connect() as conn:
+            rows = conn.execute(query.format(where=where), params).fetchall()
+
+        return [
+            DailyMileage(
+                day=date.fromisoformat(row["day"]),
+                vehicle_key=row["vehicle_key"],
+                start_odometer_km=row["start_odometer_km"],
+                end_odometer_km=row["end_odometer_km"],
             )
+            for row in rows
+        ]
+
+    def daily_mileage_count(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count FROM daily_mileage").fetchone()
+            return int(row["count"]) if row else 0
 
     def daily_mileage(self, days: int = 14, vehicle_key: str | None = None) -> list[DailyMileage]:
         query = """

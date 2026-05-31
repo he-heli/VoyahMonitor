@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Request, Response, async_playwright
 
 from voyah_monitor.config import Settings
@@ -46,6 +48,17 @@ async def _wait_for_login_success(page: Page, base_url: str, timeout_sec: int = 
     return False
 
 
+async def _ensure_chromium_installed(playwright) -> None:
+    executable = playwright.chromium.executable_path
+    if not Path(executable).exists():
+        print(
+            "Chromium for Playwright is not installed.\n"
+            "Run: playwright install chromium",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+
 async def run_interactive_login(settings: Settings) -> None:
     capture = NetworkCapture(
         base_url=settings.voyah_base_url,
@@ -54,7 +67,17 @@ async def run_interactive_login(settings: Settings) -> None:
     pending: dict[str, CapturedRequest] = {}
 
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=False)
+        await _ensure_chromium_installed(playwright)
+        try:
+            browser = await playwright.chromium.launch(headless=False)
+        except PlaywrightError as exc:
+            print(
+                "Failed to launch Chromium.\n"
+                "If Playwright was just installed, run: playwright install chromium\n"
+                f"Details: {exc}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from exc
         context = await browser.new_context()
         page = await context.new_page()
 

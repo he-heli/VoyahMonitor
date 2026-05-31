@@ -115,6 +115,26 @@ def _should_ignore(url: str) -> bool:
     return False
 
 
+READ_ONLY_POST_SUFFIXES = (
+    "/search",
+    "/search-geo",
+    "/list",
+    "/query",
+    "/filters",
+)
+
+
+def _is_read_service_path(path: str) -> bool:
+    lowered = path.lower()
+    if not any(part in lowered for part in ("-service/", "/service/")):
+        return False
+    if any(keyword in lowered for keyword in MUTATION_KEYWORDS):
+        return False
+    if any(lowered.endswith(suffix) or suffix in lowered for suffix in READ_ONLY_POST_SUFFIXES):
+        return True
+    return False
+
+
 def classify_request(method: str, url: str, base_url: str) -> str:
     parsed = urlparse(url)
     path = parsed.path or "/"
@@ -132,14 +152,14 @@ def classify_request(method: str, url: str, base_url: str) -> str:
         return "blocked_mutation"
 
     if upper_method == "GET":
-        if "/api/" in path or path.startswith("/api"):
+        if "/api/" in path or path.startswith("/api") or _is_read_service_path(path):
             return "candidate_read_get"
         return "other_get"
 
     if upper_method == "POST":
-        if any(keyword in path.lower() for keyword in ("login", "auth", "captcha", "sms", "code")):
+        if any(keyword in path.lower() for keyword in ("login", "auth", "captcha", "sms", "code", "sign-up", "sign-in")):
             return "auth"
-        if "/api/" in path or path.startswith("/api"):
+        if "/api/" in path or path.startswith("/api") or _is_read_service_path(path):
             return "candidate_read_post"
         return "other_post"
 
@@ -150,9 +170,10 @@ def suggest_allowed_paths(capture: NetworkCapture) -> tuple[set[str], set[str]]:
     get_paths: set[str] = set()
     post_paths: set[str] = set()
     for item in capture.requests:
-        if item.classification == "candidate_read_get":
+        classification = classify_request(item.method, item.url, capture.base_url)
+        if classification == "candidate_read_get":
             get_paths.add(item.path)
-        elif item.classification == "candidate_read_post":
+        elif classification == "candidate_read_post":
             post_paths.add(item.path)
     return get_paths, post_paths
 

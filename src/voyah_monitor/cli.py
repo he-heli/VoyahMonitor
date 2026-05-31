@@ -13,6 +13,15 @@ from voyah_monitor.network_inspector import load_network_capture, suggest_allowe
 from voyah_monitor.session import session_exists
 from voyah_monitor.storage import TelemetryStorage
 from voyah_monitor.telemetry import format_status, normalize_payload
+from voyah_monitor.vehicle_status import format_dashboard_status
+from voyah_monitor.session_manager import SessionExpiredError
+from voyah_monitor.voyah_api import VoyahReadOnlyApi
+
+
+def _session_error_message(exc: Exception) -> str:
+    if isinstance(exc, SessionExpiredError):
+        return str(exc)
+    return f"{exc}\nIf refresh failed, run `voyah-monitor login` again."
 
 
 def cmd_login(settings: Settings) -> int:
@@ -43,8 +52,12 @@ def cmd_fetch(settings: Settings) -> int:
         return 1
 
     storage = TelemetryStorage(settings.voyah_db_path)
-    with VoyahClient(settings) as client:
-        results = client.fetch_all_allowed()
+    try:
+        with VoyahClient(settings) as client:
+            results = client.fetch_all_allowed()
+    except SessionExpiredError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
     saved = 0
     for item in results:
@@ -63,17 +76,21 @@ def cmd_fetch(settings: Settings) -> int:
 
 
 def cmd_status(settings: Settings) -> int:
-    storage = TelemetryStorage(settings.voyah_db_path)
-    latest = storage.latest_snapshot()
-    if not latest:
-        print("No telemetry in local database yet.", file=sys.stderr)
+    if not session_exists(settings.voyah_session_path):
+        print("Session not found. Run `voyah-monitor login` first.", file=sys.stderr)
         return 1
-    print(format_status(latest))
-    mileage = storage.daily_mileage(days=7)
-    if mileage:
-        print("\nDaily mileage:")
-        for row in mileage:
-            print(f"  {row.day}: {row.distance_km:.1f} km")
+
+    try:
+        with VoyahReadOnlyApi(settings) as api:
+            items = api.fetch_dashboard_status()
+    except SessionExpiredError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Failed to fetch dashboard status: {_session_error_message(exc)}", file=sys.stderr)
+        return 1
+
+    print(format_dashboard_status(items))
     return 0
 
 
@@ -89,7 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("login", help="Interactive SMS login and session capture")
     subparsers.add_parser("inspect", help="Show captured network requests and suggested allow-list")
     subparsers.add_parser("fetch", help="Fetch telemetry using read-only allow-list")
-    subparsers.add_parser("status", help="Show latest stored telemetry")
+    subparsers.add_parser("status", help="Show live vehicle fields from VOYAH dashboard (read-only)")
     subparsers.add_parser("bot", help="Run Telegram bot")
 
     return parser
