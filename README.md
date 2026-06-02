@@ -15,7 +15,7 @@ Read-only клиент для [VOYAH Assist](https://app.voyahassist.ru/): ин�
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e ".[login]"
 playwright install chromium
 
 cp .env.example .env
@@ -27,6 +27,15 @@ cp .env.example .env
 После login сессия сохраняется в `data/session.json`. Access token живёт ~10 минут,
 но клиент автоматически обновляет его через `refreshToken` (~90 дней).
 SMS-login нужен только при первой настройке или когда refresh token истечёт.
+
+**Рекомендуется** (ПК с браузером):
+
+```bash
+./scripts/local-login.sh        # Linux / macOS
+# scripts\local-login.bat       # Windows
+```
+
+Или вручную:
 
 ```bash
 voyah-monitor login
@@ -77,23 +86,31 @@ voyah-monitor bot
 
 Фоновый сбор — примерно раз в 4 часа с разбросом (`TELEGRAM_POLL_INTERVAL`, `TELEGRAM_POLL_JITTER`).
 
-## Docker
+## Docker (локально)
 
 ```bash
 cp .env.example .env
+# Сначала scripts/local-login.sh — session.json в ./data
+
 docker compose build
-
-# интерактивный login
-docker compose --profile login run --rm voyah-login
-
-# разовый fetch
-docker compose --profile fetch run --rm voyah-fetch
-
-# постоянный бот
 docker compose up -d voyah-monitor
 ```
 
+Профиль `login` в compose — только для разработки (`Dockerfile.login` с Playwright).
+На **VPS** login в Docker не используйте.
+
+```bash
+docker compose --profile fetch run --rm voyah-fetch
+```
+
 Данные сессии и SQLite хранятся в `./data`.
+
+## Production (VPS)
+
+Пошаговое развёртывание: **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+
+Кратко: login на ПК → `scp` `.env` и `session.json` → на сервере `./scripts/prod/up.sh`.
+Prod-образ без Playwright (быстрая сборка).
 
 ## Структура
 
@@ -107,6 +124,8 @@ src/voyah_monitor/
   storage.py         # SQLite snapshots + daily mileage
   bot.py
   cli.py
+scripts/             # local-login, prod/up|down|rebuild|…
+docs/DEPLOY.md       # VPS deployment
 AGENTS.md            # координация; субагенты в .cursor/agents/
 .cursor/agents/      # voyah-core, voyah-telegram, voyah-docker, voyah-docs
 ```
@@ -135,4 +154,4 @@ gh repo create VoyahMonitor --public --source=. --remote=origin --push
 
 - SmartCaptcha проходится только вручную.
 - Точные API endpoint-ы зависят от версии кабинета VOYAH и определяются после login через network capture.
-- Если refresh token истёк, повторите `voyah-monitor login`.
+- Если refresh token истёк, повторите `./scripts/local-login.sh` и загрузите новый `session.json` на сервер.

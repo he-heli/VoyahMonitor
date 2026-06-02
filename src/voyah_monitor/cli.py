@@ -5,7 +5,6 @@ import asyncio
 import json
 import sys
 
-from voyah_monitor.auth_login import run_interactive_login
 from voyah_monitor.bot import run_bot
 from voyah_monitor.config import Settings, get_settings
 from voyah_monitor.network_inspector import load_network_capture, suggest_allowed_paths
@@ -24,6 +23,16 @@ def _session_error_message(exc: Exception) -> str:
 
 
 def cmd_login(settings: Settings) -> int:
+    try:
+        from voyah_monitor.auth_login import run_interactive_login
+    except ImportError as exc:
+        print(
+            "Playwright is required for login. Install locally:\n"
+            "  pip install -e \".[login]\" && playwright install chromium\n"
+            "Or run: scripts/local-login.sh (Linux/macOS) or scripts/local-login.bat (Windows)",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
     asyncio.run(run_interactive_login(settings))
     return 0
 

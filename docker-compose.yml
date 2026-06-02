@@ -1,6 +1,8 @@
 services:
   voyah-monitor:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: voyah-monitor
     env_file:
       - .env
@@ -9,8 +11,11 @@ services:
     restart: unless-stopped
     command: ["voyah-monitor", "bot"]
 
+  # Dev only — on VPS use local scripts/local-login.sh + scp session.json
   voyah-login:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.login
     container_name: voyah-monitor-login
     env_file:
       - .env
@@ -23,7 +28,9 @@ services:
       - login
 
   voyah-fetch:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: voyah-monitor-fetch
     env_file:
       - .env
