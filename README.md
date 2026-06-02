@@ -107,6 +107,7 @@ src/voyah_monitor/
   storage.py         # SQLite snapshots + daily mileage
   bot.py
   cli.py
+AGENTS.md            # роли и промпты для 4 агентов Cursor
 ```
 
 ## Переменные окружения
