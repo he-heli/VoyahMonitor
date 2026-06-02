@@ -2,19 +2,42 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from voyah_monitor.bot_ui import (
+    BTN_ALERTS,
+    BTN_BRIEF,
+    BTN_FULL,
+    BTN_LOCATION,
+    BTN_SETTINGS,
+    BTN_SNAPSHOT,
+    MENU_BUTTONS,
+    PLACEHOLDER_ALERTS,
+    PLACEHOLDER_SETTINGS,
+    main_menu_keyboard,
+    split_telegram_messages,
+    yandex_maps_keyboard,
+)
 from voyah_monitor.config import Settings
-from voyah_monitor.storage import TelemetryStorage
-from voyah_monitor.telemetry import format_status, dashboard_items_to_telemetry
 from voyah_monitor.scheduling import next_poll_delay_seconds
 from voyah_monitor.session_manager import SessionExpiredError
+from voyah_monitor.storage import TelemetryStorage
+from voyah_monitor.telemetry import dashboard_items_to_telemetry
+from voyah_monitor.vehicle_status import (
+    extract_vehicle_coordinates,
+    format_dashboard_brief,
+    format_dashboard_status,
+    vehicle_location_title,
+)
 from voyah_monitor.voyah_api import VoyahReadOnlyApi
 
 logger = logging.getLogger(__name__)
+
+MENU_HINT = "Используйте кнопки меню ниже."
 
 
 def _authorized(settings: Settings, user_id: int) -> bool:
@@ -22,138 +45,178 @@ def _authorized(settings: Settings, user_id: int) -> bool:
     return not allowed or user_id in allowed
 
 
-def _render_mileage_chart(storage: TelemetryStorage, vehicle_key: str | None = None) -> str:
-    rows = storage.daily_mileage(days=14, vehicle_key=vehicle_key)
-    if not rows:
-        return "Нет данных по дневным пробегам."
-
-    rows = list(reversed(rows))
-    max_distance = max(row.distance_km for row in rows) or 1.0
-    lines = ["Дневной пробег (14 дней):"]
-    for row in rows:
-        bar_len = max(1, int((row.distance_km / max_distance) * 10)) if row.distance_km > 0 else 0
-        bar = "#" * bar_len
-        lines.append(f"{row.day.isoformat()} {row.distance_km:5.1f} km {bar}")
-    return "\n".join(lines)
-
-
-def _render_battery_chart(storage: TelemetryStorage, vehicle_key: str | None = None) -> str:
-    points = storage.battery_history(days=7, vehicle_key=vehicle_key)
-    if not points:
-        return "Нет данных по заряду батареи."
-
-    sampled = points[:: max(1, len(points) // 12)]
-    lines = ["Заряд батареи (7 дней):"]
-    for ts, value in sampled:
-        lines.append(f"{ts.astimezone().strftime('%m-%d %H:%M')} {value:5.1f}%")
-    return "\n".join(lines)
-
-
-async def _collect_and_store(settings: Settings, storage: TelemetryStorage) -> str:
-    try:
-        telemetries = await asyncio.to_thread(_fetch_and_save, settings, storage)
-    except SessionExpiredError as exc:
-        return str(exc)
-    except Exception as exc:
-        return f"Не удалось получить телеметрию: {exc}"
-
-    if telemetries:
-        return f"Сохранено записей телеметрии: {len(telemetries)}"
-    return "Автомобили не найдены."
+def _fetch_dashboard(settings: Settings) -> list[dict[str, Any]]:
+    with VoyahReadOnlyApi(settings) as api:
+        return api.fetch_dashboard_status()
 
 
 def _fetch_and_save(settings: Settings, storage: TelemetryStorage) -> list:
-    with VoyahReadOnlyApi(settings) as api:
-        items = api.fetch_dashboard_status()
+    items = _fetch_dashboard(settings)
     telemetries = dashboard_items_to_telemetry(items)
     for telemetry in telemetries:
         storage.save_snapshot(telemetry)
     return telemetries
 
 
+async def _send_menu(message: Message, text: str) -> None:
+    await message.answer(text, reply_markup=main_menu_keyboard())
+
+
+async def _send_long_text(message: Message, text: str) -> None:
+    parts = split_telegram_messages(text)
+    for index, part in enumerate(parts):
+        if index == len(parts) - 1:
+            await message.answer(part, reply_markup=main_menu_keyboard())
+        else:
+            await message.answer(part)
+
+
 def create_dispatcher(settings: Settings, storage: TelemetryStorage) -> Dispatcher:
     dp = Dispatcher()
 
-    @dp.message(Command("start", "help"))
-    async def cmd_help(message: Message) -> None:
-        if not _authorized(settings, message.from_user.id):
-            await message.answer("Доступ запрещен.")
+    async def _guard(message: Message) -> bool:
+        if _authorized(settings, message.from_user.id):
+            return True
+        await message.answer("Доступ запрещен.")
+        return False
+
+    @dp.message(Command("start", "help", "menu"))
+    async def cmd_menu(message: Message) -> None:
+        if not await _guard(message):
             return
-        await message.answer(
-            "Команды:\n"
-            "/status — актуальное состояние (запрос к VOYAH)\n"
-            "/collect — сохранить снимок в базу\n"
-            "/mileage — график дневных пробегов\n"
-            "/battery — история заряда\n"
-            "/history — последний сохранённый снимок\n\n"
-            f"Фоновое обновление: ~каждые {settings.telegram_poll_interval // 3600} ч "
-            f"(±{int(settings.telegram_poll_jitter * 100)}%)"
+        hours = settings.telegram_poll_interval // 3600
+        jitter_pct = int(settings.telegram_poll_jitter * 100)
+        await _send_menu(
+            message,
+            "VOYAH Monitor\n\n"
+            f"Фоновый сбор в базу: ~каждые {hours} ч (±{jitter_pct}%)\n"
+            "Актуальные данные — по кнопкам «Полная» / «Краткая» / «Найти машину».\n\n"
+            + MENU_HINT,
         )
 
     @dp.message(Command("status"))
-    async def cmd_status(message: Message) -> None:
-        if not _authorized(settings, message.from_user.id):
-            await message.answer("Доступ запрещен.")
+    async def cmd_status_alias(message: Message) -> None:
+        await on_full_info(message)
+
+    @dp.message(Command("collect"))
+    async def cmd_collect_alias(message: Message) -> None:
+        await on_snapshot(message)
+
+    @dp.message(F.text == BTN_FULL)
+    async def on_full_info(message: Message) -> None:
+        if not await _guard(message):
             return
-        await message.answer("Запрашиваю актуальные данные (read-only)...")
+        await message.answer("Загружаю полную информацию (read-only)...", reply_markup=main_menu_keyboard())
+        try:
+            items = await asyncio.to_thread(_fetch_dashboard, settings)
+        except SessionExpiredError as exc:
+            await message.answer(str(exc), reply_markup=main_menu_keyboard())
+            return
+        except Exception as exc:
+            await message.answer(f"Ошибка: {exc}", reply_markup=main_menu_keyboard())
+            return
+        if not items:
+            await message.answer("Автомобили не найдены.", reply_markup=main_menu_keyboard())
+            return
+        await _send_long_text(message, format_dashboard_status(items))
+
+    @dp.message(F.text == BTN_BRIEF)
+    async def on_brief_info(message: Message) -> None:
+        if not await _guard(message):
+            return
+        await message.answer("Загружаю краткую сводку...", reply_markup=main_menu_keyboard())
+        try:
+            items = await asyncio.to_thread(_fetch_dashboard, settings)
+        except SessionExpiredError as exc:
+            await message.answer(str(exc), reply_markup=main_menu_keyboard())
+            return
+        except Exception as exc:
+            await message.answer(f"Ошибка: {exc}", reply_markup=main_menu_keyboard())
+            return
+        if not items:
+            await message.answer("Автомобили не найдены.", reply_markup=main_menu_keyboard())
+            return
+        await _send_long_text(message, format_dashboard_brief(items))
+
+    @dp.message(F.text == BTN_LOCATION)
+    async def on_find_car(message: Message) -> None:
+        if not await _guard(message):
+            return
+        await message.answer("Определяю местоположение...", reply_markup=main_menu_keyboard())
+        try:
+            items = await asyncio.to_thread(_fetch_dashboard, settings)
+        except SessionExpiredError as exc:
+            await message.answer(str(exc), reply_markup=main_menu_keyboard())
+            return
+        except Exception as exc:
+            await message.answer(f"Ошибка: {exc}", reply_markup=main_menu_keyboard())
+            return
+        if not items:
+            await message.answer("Автомобили не найдены.", reply_markup=main_menu_keyboard())
+            return
+
+        sent = False
+        for item in items:
+            coords = extract_vehicle_coordinates(item)
+            title = vehicle_location_title(item)
+            if not coords:
+                await message.answer(
+                    f"{title}: геопозиция недоступна.",
+                    reply_markup=main_menu_keyboard(),
+                )
+                continue
+            lat, lon = coords
+            await message.answer_location(latitude=lat, longitude=lon)
+            await message.answer(
+                f"{title}\n{lat:.5f}, {lon:.5f}",
+                reply_markup=yandex_maps_keyboard(lat, lon),
+            )
+            sent = True
+
+        if sent:
+            await message.answer("Точка на карте отправлена.", reply_markup=main_menu_keyboard())
+
+    @dp.message(F.text == BTN_SNAPSHOT)
+    async def on_snapshot(message: Message) -> None:
+        if not await _guard(message):
+            return
+        await message.answer("Сохраняю снимок в базу (read-only)...", reply_markup=main_menu_keyboard())
         try:
             telemetries = await asyncio.to_thread(_fetch_and_save, settings, storage)
         except SessionExpiredError as exc:
-            await message.answer(str(exc))
+            await message.answer(str(exc), reply_markup=main_menu_keyboard())
             return
         except Exception as exc:
-            await message.answer(f"Не удалось получить телеметрию: {exc}")
+            await message.answer(f"Ошибка: {exc}", reply_markup=main_menu_keyboard())
             return
-        if not telemetries:
-            await message.answer("Автомобили не найдены.")
-            return
-        await message.answer("\n\n---\n\n".join(format_status(item) for item in telemetries))
+        if telemetries:
+            await message.answer(
+                f"Снимок сохранён: {len(telemetries)} запись(ей).\n"
+                f"Всего в базе: {storage.snapshot_count()} снимков.",
+                reply_markup=main_menu_keyboard(),
+            )
+        else:
+            await message.answer("Автомобили не найдены.", reply_markup=main_menu_keyboard())
 
-    @dp.message(Command("collect"))
-    async def cmd_collect(message: Message) -> None:
-        if not _authorized(settings, message.from_user.id):
-            await message.answer("Доступ запрещен.")
+    @dp.message(F.text == BTN_SETTINGS)
+    async def on_settings(message: Message) -> None:
+        if not await _guard(message):
             return
-        await message.answer("Запрашиваю телеметрию (read-only)...")
-        result = await asyncio.to_thread(_collect_and_store, settings, storage)
-        await message.answer(result)
+        await _send_menu(message, PLACEHOLDER_SETTINGS)
 
-    @dp.message(Command("mileage"))
-    async def cmd_mileage(message: Message) -> None:
-        if not _authorized(settings, message.from_user.id):
-            await message.answer("Доступ запрещен.")
+    @dp.message(F.text == BTN_ALERTS)
+    async def on_alerts(message: Message) -> None:
+        if not await _guard(message):
             return
-        await message.answer(_render_mileage_chart(storage))
-
-    @dp.message(Command("battery"))
-    async def cmd_battery(message: Message) -> None:
-        if not _authorized(settings, message.from_user.id):
-            await message.answer("Доступ запрещен.")
-            return
-        await message.answer(_render_battery_chart(storage))
-
-    @dp.message(Command("history"))
-    async def cmd_history(message: Message) -> None:
-        if not _authorized(settings, message.from_user.id):
-            await message.answer("Доступ запрещен.")
-            return
-        latest = storage.latest_snapshot()
-        if not latest:
-            await message.answer("История пуста.")
-            return
-        mileage = storage.daily_mileage(days=7)
-        text = format_status(latest)
-        if mileage:
-            text += "\n\nПоследние дни:\n"
-            for row in mileage[:7]:
-                text += f"{row.day}: {row.distance_km:.1f} km\n"
-        await message.answer(text)
+        await _send_menu(message, PLACEHOLDER_ALERTS)
 
     @dp.message(F.text)
     async def fallback(message: Message) -> None:
         if not _authorized(settings, message.from_user.id):
             return
-        await message.answer("Неизвестная команда. Используйте /help")
+        if message.text in MENU_BUTTONS:
+            return
+        await _send_menu(message, f"Неизвестная команда.\n\n{MENU_HINT}")
 
     return dp
 

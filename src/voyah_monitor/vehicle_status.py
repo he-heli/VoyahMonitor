@@ -562,3 +562,108 @@ def format_dashboard_status(items: list[dict[str, Any]]) -> str:
 
     chunks = [format_vehicle_dashboard(item, index, len(items)) for index, item in enumerate(items, start=1)]
     return "\n\n".join(chunks)
+
+
+def _brief_fields(
+    table: dict[str, Any],
+    geo: dict[str, Any],
+    detail: dict[str, Any],
+    tbox: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Key live metrics that change often (for Telegram short view)."""
+    metrics = _collect_metrics(table, detail, geo, tbox)
+    car_model = table.get("carModel") if isinstance(table.get("carModel"), dict) else {}
+
+    fields: dict[str, Any] = {
+        "Модель": car_model.get("displayName") or car_model.get("name"),
+        "Гос. номер": table.get("licensePlate") or detail.get("licensePlate"),
+        "Статус": _status_chip(tbox),
+    }
+    if metrics.get("fuelPercentage") is not None or metrics.get("remainsMileageFuel") is not None:
+        fuel_pct = metrics.get("fuelPercentage")
+        fuel_km = metrics.get("remainsMileageFuel")
+        if fuel_pct is not None and fuel_km is not None:
+            fields["Топливо"] = f"{fuel_pct}% / {fuel_km} км"
+        elif fuel_pct is not None:
+            fields["Топливо"] = f"{fuel_pct}%"
+        elif fuel_km is not None:
+            fields["Топливо"] = f"{fuel_km} км"
+
+    battery_pct = metrics.get("batteryPercentage")
+    battery_km = metrics.get("remainsMileage")
+    if battery_pct is not None and battery_km is not None:
+        fields["Батарея"] = f"{battery_pct}% / {battery_km} км"
+    elif battery_pct is not None:
+        fields["Батарея"] = f"{battery_pct}%"
+
+    fields.update(
+        {
+            "12V": metrics.get("12VBatteryVoltage"),
+            "Пробег, км": metrics.get("odometer"),
+            "SOH, %": metrics.get("soh"),
+            "ОЖ, °C": metrics.get("coolantTemp"),
+            "Темп. АКБ, °C": metrics.get("batteryTemp"),
+            "На улице, °C": metrics.get("outsideTemp"),
+            "Скорость": _speed_label(metrics.get("speed")),
+            "На связи": _on_off_label(tbox.get("isOnline"), on_text="да", off_text="нет")
+            if isinstance(tbox, dict)
+            else None,
+            "Обновлено": _recency_from_sources(table, detail, metrics=metrics),
+        }
+    )
+    return fields
+
+
+def format_vehicle_brief(item: dict[str, Any], index: int, total: int) -> str:
+    table = item.get("table", {})
+    geo = item.get("geo", {})
+    detail = item.get("detail", {})
+    tbox = item.get("tbox")
+
+    car_model = table.get("carModel") if isinstance(table.get("carModel"), dict) else {}
+    title = car_model.get("displayName") or table.get("licensePlate") or table.get("vin") or f"Автомобиль {index}"
+
+    lines = [f"--- [{index}/{total}] {title} — кратко ---"]
+    for label, value in _brief_fields(table, geo, detail, tbox).items():
+        if value is None or value == "":
+            continue
+        lines.append(f"{label}: {_display_value(value)}")
+
+    if item.get("tbox_error"):
+        lines.append(f"Телеметрия: {item['tbox_error']}")
+    return "\n".join(lines)
+
+
+def format_dashboard_brief(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return "Автомобили не найдены."
+    chunks = [format_vehicle_brief(item, index, len(items)) for index, item in enumerate(items, start=1)]
+    return "\n\n".join(chunks)
+
+
+def extract_vehicle_coordinates(item: dict[str, Any]) -> tuple[float, float] | None:
+    table = item.get("table") if isinstance(item.get("table"), dict) else {}
+    geo = item.get("geo") if isinstance(item.get("geo"), dict) else {}
+    detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+    tbox = item.get("tbox") if isinstance(item.get("tbox"), dict) else None
+
+    metrics = _collect_metrics(table, detail, geo, tbox)
+    lat = metrics.get("latitude", geo.get("lat"))
+    lon = metrics.get("longitude", geo.get("lon"))
+    if lat is None or lon is None:
+        return None
+    try:
+        return float(lat), float(lon)
+    except (TypeError, ValueError):
+        return None
+
+
+def vehicle_location_title(item: dict[str, Any]) -> str:
+    table = item.get("table") if isinstance(item.get("table"), dict) else {}
+    car_model = table.get("carModel") if isinstance(table.get("carModel"), dict) else {}
+    return (
+        car_model.get("displayName")
+        or table.get("licensePlate")
+        or table.get("vin")
+        or "Автомобиль"
+    )

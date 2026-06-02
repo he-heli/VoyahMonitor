@@ -7,11 +7,12 @@ import pytest
 from voyah_monitor.client import ReadOnlyViolationError, VoyahClient
 from voyah_monitor.network_inspector import CapturedRequest, NetworkCapture, classify_request, suggest_allowed_paths
 from voyah_monitor.display import format_database_status
+from voyah_monitor.bot_ui import split_telegram_messages, yandex_maps_url
 from voyah_monitor.scheduling import next_poll_delay_seconds
 from voyah_monitor.session import save_session_dict
 from voyah_monitor.storage import TelemetryStorage
 from voyah_monitor.telemetry import dashboard_items_to_telemetry, normalize_record
-from voyah_monitor.vehicle_status import format_dashboard_status
+from voyah_monitor.vehicle_status import format_dashboard_brief, format_dashboard_status
 from voyah_monitor.voyah_api import VoyahReadOnlyApi
 
 
@@ -304,3 +305,44 @@ def test_next_poll_delay_seconds_varies_within_jitter() -> None:
     assert min(delays) >= base * (1 - jitter)
     assert max(delays) <= base * (1 + jitter)
     assert len(set(delays)) > 1
+
+
+def test_format_dashboard_brief() -> None:
+    item = {
+        "table": {
+            "licensePlate": "A123",
+            "carModel": {"displayName": "ФРИ / FREE"},
+            "sensors": {"battery": 71, "odometer": 1451},
+        },
+        "geo": {},
+        "detail": {},
+        "tbox": {
+            "isOnline": True,
+            "sensors": {
+                "chip": {"title": "Доступен"},
+                "sensorsData": {
+                    "batteryPercentage": 71,
+                    "remainsMileage": 113,
+                    "fuelPercentage": 64,
+                    "remainsMileageFuel": 224,
+                },
+            },
+        },
+    }
+    text = format_dashboard_brief([item])
+    assert "кратко" in text
+    assert "71% / 113 км" in text
+    assert "64% / 224 км" in text
+
+
+def test_yandex_maps_url() -> None:
+    url = yandex_maps_url(55.75, 48.74)
+    assert "pt=48.74,55.75" in url
+    assert url.startswith("https://yandex.ru/maps/")
+
+
+def test_split_telegram_messages() -> None:
+    long_text = "A" * 5000
+    parts = split_telegram_messages(long_text, limit=4000)
+    assert len(parts) >= 2
+    assert "".join(parts) == long_text

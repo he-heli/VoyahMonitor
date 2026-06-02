@@ -73,9 +73,9 @@ TELEGRAM_ALLOWED_USER_IDS=123456789
 voyah-monitor bot
 ```
 
-Команды бота: `/status`, `/collect`, `/mileage`, `/battery`, `/history`.
+Команды бота: кнопки в меню или `/start`, `/status`, `/collect`.
 
-Фоновый сбор — примерно раз в 4 часа с разбросом (`TELEGRAM_POLL_INTERVAL=14400`, `TELEGRAM_POLL_JITTER=0.25`). `/status` и `/collect` запрашивают данные сразу по запросу.
+Фоновый сбор — примерно раз в 4 часа с разбросом (`TELEGRAM_POLL_INTERVAL`, `TELEGRAM_POLL_JITTER`).
 
 ## Docker
 
