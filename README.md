@@ -107,7 +107,8 @@ src/voyah_monitor/
   storage.py         # SQLite snapshots + daily mileage
   bot.py
   cli.py
-AGENTS.md            # роли и промпты для 4 агентов Cursor
+AGENTS.md            # координация; субагенты в .cursor/agents/
+.cursor/agents/      # voyah-core, voyah-telegram, voyah-docker, voyah-docs
 ```
 
 ## Переменные окружения

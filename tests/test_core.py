@@ -7,7 +7,13 @@ import pytest
 from voyah_monitor.client import ReadOnlyViolationError, VoyahClient
 from voyah_monitor.network_inspector import CapturedRequest, NetworkCapture, classify_request, suggest_allowed_paths
 from voyah_monitor.display import format_database_status
-from voyah_monitor.bot_ui import split_telegram_messages, yandex_maps_url
+from voyah_monitor.bot_ui import (
+    format_poll_interval_label,
+    format_settings_poll_text,
+    parse_poll_callback_data,
+    split_telegram_messages,
+    yandex_maps_url,
+)
 from voyah_monitor.scheduling import next_poll_delay_seconds
 from voyah_monitor.session import save_session_dict
 from voyah_monitor.storage import TelemetryStorage
@@ -339,6 +345,28 @@ def test_yandex_maps_url() -> None:
     url = yandex_maps_url(55.75, 48.74)
     assert "pt=48.74,55.75" in url
     assert url.startswith("https://yandex.ru/maps/")
+
+
+def test_format_poll_interval_label() -> None:
+    assert format_poll_interval_label(300) == "5 мин"
+    assert format_poll_interval_label(3600) == "1 ч"
+    assert format_poll_interval_label(14400) == "4 ч"
+    assert format_poll_interval_label(1800) == "30 мин"
+    assert format_poll_interval_label(86400) == "24 ч"
+
+
+def test_parse_poll_callback_data() -> None:
+    assert parse_poll_callback_data("poll:1800") == 1800
+    assert parse_poll_callback_data("poll:bad") is None
+    assert parse_poll_callback_data("other:1") is None
+
+
+def test_format_settings_poll_text() -> None:
+    text = format_settings_poll_text(14400, 0.25)
+    assert "4 ч" in text
+    assert "±25%" in text
+    assert "3 ч" in text
+    assert "5 ч" in text
 
 
 def test_split_telegram_messages() -> None:

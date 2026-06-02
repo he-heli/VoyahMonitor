@@ -62,6 +62,7 @@ class TelemetryStorage:
                     location_sharing INTEGER,
                     status TEXT,
                     is_charging INTEGER,
+                    v12_voltage REAL,
                     raw_json TEXT NOT NULL
                 );
 
@@ -86,6 +87,7 @@ class TelemetryStorage:
                     "soh_percent": "REAL",
                     "is_online": "INTEGER",
                     "location_sharing": "INTEGER",
+                    "v12_voltage": "REAL",
                 },
             )
 
@@ -111,8 +113,8 @@ class TelemetryStorage:
                     captured_at, vehicle_key, vehicle_id, vin, name,
                     odometer_km, battery_percent, range_km, speed_kmh,
                     latitude, longitude, course_deg, soh_percent, is_online,
-                    location_sharing, status, is_charging, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    location_sharing, status, is_charging, v12_voltage, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     telemetry.captured_at.isoformat(),
@@ -136,6 +138,7 @@ class TelemetryStorage:
                     else None,
                     telemetry.status,
                     1 if telemetry.is_charging else 0 if telemetry.is_charging is not None else None,
+                    telemetry.v12_voltage,
                     json.dumps(telemetry.raw, ensure_ascii=False),
                 ),
             )
@@ -192,6 +195,7 @@ class TelemetryStorage:
             longitude=row["longitude"],
             course_deg=row["course_deg"] if "course_deg" in row.keys() else None,
             soh_percent=row["soh_percent"] if "soh_percent" in row.keys() else None,
+            v12_voltage=row["v12_voltage"] if "v12_voltage" in row.keys() else None,
             is_online=bool(row["is_online"]) if "is_online" in row.keys() and row["is_online"] is not None else None,
             location_sharing=bool(row["location_sharing"])
             if "location_sharing" in row.keys() and row["location_sharing"] is not None
@@ -200,6 +204,37 @@ class TelemetryStorage:
             is_charging=bool(row["is_charging"]) if row["is_charging"] is not None else None,
             raw=json.loads(row["raw_json"]),
         )
+
+    def snapshots_in_range(
+        self,
+        *,
+        days: int | None = None,
+        vehicle_key: str | None = None,
+    ) -> list[SnapshotRecord]:
+        where_parts: list[str] = []
+        params: list[object] = []
+        if vehicle_key:
+            where_parts.append("vehicle_key = ?")
+            params.append(vehicle_key)
+        if days is not None:
+            where_parts.append("captured_at >= datetime('now', ?)")
+            params.append(f"-{days} days")
+        where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        query = f"""
+            SELECT * FROM telemetry_snapshots
+            {where}
+            ORDER BY captured_at ASC, id ASC
+        """
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            SnapshotRecord(
+                id=row["id"],
+                vehicle_key=row["vehicle_key"],
+                telemetry=self._row_to_telemetry(row),
+            )
+            for row in rows
+        ]
 
     def all_snapshots(self, vehicle_key: str | None = None) -> list[SnapshotRecord]:
         query = """

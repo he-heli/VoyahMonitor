@@ -251,23 +251,17 @@ def _summary_fields(
 
     fields: dict[str, Any] = {
         "Статус": _status_chip(tbox),
+        "Топливо, %": metrics.get("fuelPercentage"),
+        "Топливо, км": metrics.get("remainsMileageFuel"),
+        "Батарея, %": metrics.get("batteryPercentage"),
+        "Батарея, км": metrics.get("remainsMileage"),
+        "Охлаждающая жидкость, °C": metrics.get("coolantTemp"),
+        "Температура батареи, °C": metrics.get("batteryTemp"),
+        "Напряжение АКБ, V": metrics.get("12VBatteryVoltage"),
+        "Одометр, км": metrics.get("odometer"),
+        "SOH, %": metrics.get("soh"),
+        "Обновлено": _recency_from_sources(table, detail, metrics=metrics),
     }
-    if metrics.get("fuelPercentage") is not None or metrics.get("remainsMileageFuel") is not None:
-        fields["Топливо, %"] = metrics.get("fuelPercentage")
-        fields["Топливо, км"] = metrics.get("remainsMileageFuel")
-
-    fields.update(
-        {
-            "Батарея, %": metrics.get("batteryPercentage"),
-            "Батарея, км": metrics.get("remainsMileage"),
-            "Охлаждающая жидкость, °C": metrics.get("coolantTemp"),
-            "Температура батареи, °C": metrics.get("batteryTemp"),
-            "Напряжение АКБ, V": metrics.get("12VBatteryVoltage"),
-            "Одометр, км": metrics.get("odometer"),
-            "SOH, %": metrics.get("soh"),
-            "Обновлено": _recency_from_sources(table, detail, metrics=metrics),
-        }
-    )
     return fields
 
 
@@ -379,6 +373,7 @@ def dashboard_item_to_telemetry(item: dict[str, Any]) -> "VehicleTelemetry":
         longitude=_to_float(metrics.get("longitude", geo.get("lon"))),
         course_deg=_to_float(metrics.get("course", geo.get("course"))),
         soh_percent=_to_float(metrics.get("soh")),
+        v12_voltage=_to_float(metrics.get("12VBatteryVoltage")),
         is_online=_to_bool(tbox.get("isOnline")) if tbox else None,
         location_sharing=_to_bool(table.get("locationStatus", detail.get("locationStatus"))),
         status=_status_chip(tbox),
@@ -667,3 +662,100 @@ def vehicle_location_title(item: dict[str, Any]) -> str:
         or table.get("vin")
         or "Автомобиль"
     )
+
+
+def is_dashboard_snapshot_raw(raw: Any) -> bool:
+    return isinstance(raw, dict) and any(key in raw for key in ("table", "tbox", "detail", "geo"))
+
+
+def merge_dashboard_export_fields(item: dict[str, Any]) -> dict[str, Any]:
+    """Flat fields for history export — same labels as format_vehicle_dashboard sections."""
+    table = item.get("table") if isinstance(item.get("table"), dict) else {}
+    geo = item.get("geo") if isinstance(item.get("geo"), dict) else {}
+    detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+    tbox = item.get("tbox") if isinstance(item.get("tbox"), dict) else None
+    drivers = item.get("drivers")
+    maintenance = item.get("maintenance") if isinstance(item.get("maintenance"), dict) else {}
+
+    sections: list[dict[str, Any]] = [
+        _table_fields(table, geo, detail, drivers, tbox),
+        _summary_fields(table, geo, detail, tbox),
+        _about_car_fields(table, detail),
+        _control_state_fields(tbox),
+        _climate_fields(table, detail, geo, tbox),
+        _location_fields(geo, table, detail, tbox),
+        _access_fields(drivers),
+        _maintenance_fields(maintenance),
+    ]
+
+    merged: dict[str, Any] = {}
+    for section in sections:
+        for key, value in section.items():
+            if key not in merged:
+                merged[key] = value
+    return merged
+
+
+def _empty_dashboard_item() -> dict[str, Any]:
+    return {
+        "table": {},
+        "geo": {},
+        "detail": {},
+        "tbox": {},
+        "drivers": [],
+        "maintenance": {},
+    }
+
+
+SNAPSHOT_EXPORT_DATA_HEADERS: tuple[str, ...] = tuple(
+    merge_dashboard_export_fields(_empty_dashboard_item()).keys()
+)
+
+
+def telemetry_fallback_export_fields(telemetry: "VehicleTelemetry") -> dict[str, Any]:
+    """Map stored scalar columns when raw dashboard JSON is missing."""
+    fields = merge_dashboard_export_fields(_empty_dashboard_item())
+
+    if telemetry.vin:
+        fields["VIN"] = telemetry.vin
+    if telemetry.name:
+        fields["Модель"] = telemetry.name
+    if telemetry.status:
+        fields["Статус"] = telemetry.status
+    if telemetry.battery_percent is not None:
+        fields["Заряд тяговой батареи, %"] = telemetry.battery_percent
+        fields["Батарея, %"] = telemetry.battery_percent
+    if telemetry.range_km is not None:
+        fields["Батарея, км"] = telemetry.range_km
+    if telemetry.odometer_km is not None:
+        fields["Пробег, км"] = telemetry.odometer_km
+        fields["Одометр, км"] = telemetry.odometer_km
+    if telemetry.v12_voltage is not None:
+        fields["Батарея 12V"] = telemetry.v12_voltage
+        fields["Напряжение АКБ, V"] = telemetry.v12_voltage
+    if telemetry.soh_percent is not None:
+        fields["SOH, %"] = telemetry.soh_percent
+    if telemetry.speed_kmh is not None:
+        fields["Скорость"] = _speed_label(telemetry.speed_kmh)
+    if telemetry.latitude is not None:
+        fields["Широта"] = telemetry.latitude
+    if telemetry.longitude is not None:
+        fields["Долгота"] = telemetry.longitude
+    if telemetry.course_deg is not None:
+        fields["Курс"] = telemetry.course_deg
+    if telemetry.is_online is not None:
+        fields["На связи"] = _on_off_label(telemetry.is_online, on_text="да", off_text="нет")
+    if telemetry.location_sharing is not None:
+        fields["Передача геопозиции"] = _on_off_label(
+            telemetry.location_sharing,
+            on_text="да",
+            off_text="нет",
+        )
+    return fields
+
+
+def snapshot_export_field_map(telemetry: "VehicleTelemetry") -> dict[str, Any]:
+    raw = telemetry.raw
+    if is_dashboard_snapshot_raw(raw):
+        return merge_dashboard_export_fields(raw)
+    return telemetry_fallback_export_fields(telemetry)
