@@ -4,9 +4,10 @@ import base64
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from playwright.async_api import BrowserContext
+if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext
 
 
 async def save_session(context: BrowserContext, path: Path) -> None:
