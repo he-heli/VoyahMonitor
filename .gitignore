@@ -19,3 +19,7 @@ backups/
 .DS_Store
 session.json
 network_capture.json
+
+# Cursor IDE (local only — not published)
+.cursor/
+AGENTS.md

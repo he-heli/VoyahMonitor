@@ -109,7 +109,13 @@ docker compose --profile fetch run --rm voyah-fetch
 
 Пошаговое развёртывание: **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
-Кратко: login на ПК → `scp` `.env` и `session.json` → на сервере `./scripts/prod/up.sh`.
+```bash
+# на VPS (один файл из репо: scripts/vps/install.sh)
+sudo ./install.sh
+# scp .env и data/session.json с ПК
+cd /opt/voyah-monitor && ./first_start.sh
+```
+
 Prod-образ без Playwright (быстрая сборка).
 
 ## Структура
@@ -124,11 +130,11 @@ src/voyah_monitor/
   storage.py         # SQLite snapshots + daily mileage
   bot.py
   cli.py
-scripts/             # local-login, prod/up|down|rebuild|…
+scripts/             # local-login, vps/install.sh, prod/*
 docs/DEPLOY.md       # VPS deployment
-AGENTS.md            # координация; субагенты в .cursor/agents/
-.cursor/agents/      # voyah-core, voyah-telegram, voyah-docker, voyah-docs
 ```
+
+Конфиг Cursor (`.cursor/`, `AGENTS.md`) в репозиторий не попадает — только локально.
 
 ## Переменные окружения
 

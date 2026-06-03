@@ -39,7 +39,7 @@ chmod 700 data 2>/dev/null || true
 echo ""
 echo "Bootstrap done in ${INSTALL_DIR}"
 echo ""
-echo "Before ./scripts/prod/up.sh:"
+echo "Before ./first_start.sh (or ./scripts/prod/up.sh):"
 echo "  1. On your PC: scripts/local-login.sh"
 echo "  2. voyah-monitor inspect → paste VOYAH_ALLOWED_* into .env here"
 echo "  3. scp .env and data/session.json to this server"

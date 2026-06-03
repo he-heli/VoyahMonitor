@@ -6,11 +6,4 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/common.sh"
 
 require_prod_ready
-
-docker compose build voyah-monitor
-docker compose up -d voyah-monitor
-
-echo ""
-docker compose ps
-echo ""
-echo "Bot started. Logs: ./scripts/prod/logs.sh"
+exec "${SCRIPT_DIR}/first_start.sh"

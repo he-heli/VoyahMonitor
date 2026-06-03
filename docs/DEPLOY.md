@@ -1,108 +1,72 @@
 # Развёртывание на VPS (production)
 
-Бот на сервере работает **без браузера**. SMS-логин и SmartCaptcha — только на вашем компьютере.
+Бот на сервере работает **без браузера**. SMS-логин — только на вашем ПК (`scripts/local-login.sh`).
 
-## Требования
-
-| Где | Что нужно |
-|-----|-----------|
-| **Локальный ПК** | Python 3.11+, Chromium (через Playwright) |
-| **VPS** | Docker + Docker Compose plugin, SSH, исходящий интернет |
-
-Входящие порты на VPS для бота **не нужны** (Telegram long polling). Достаточно SSH.
-
-## Обзор
+## Схема (автоматизированная)
 
 ```text
-[ПК]  local-login.sh  →  data/session.json
-[ПК]  inspect         →  VOYAH_ALLOWED_* в .env
-[ПК]  scp             →  .env + session.json на VPS
-[VPS] bootstrap.sh    →  git clone, data/
-[VPS] up.sh           →  docker compose (slim image, без Playwright)
+[ПК]  local-login.sh + inspect  →  .env + session.json
+[VPS] один install.sh          →  Docker + git clone
+[ПК]  scp                      →  .env + session.json на VPS
+[VPS] ./first_start.sh         →  docker build + бот
 ```
-
-Access token обновляется автоматически (~10 мин). Refresh token — ~90 дней. После истечения refresh снова запустите **local-login** на ПК и загрузите новый `session.json`.
 
 ---
 
-## 1. Локально: сессия и конфиг
-
-### Linux / macOS
+## Шаг 0. Локально (один раз)
 
 ```bash
 ./scripts/local-login.sh
+source .venv/bin/activate && voyah-monitor inspect
+# скопируйте VOYAH_ALLOWED_* в .env
 ```
 
-### Windows
-
-```cmd
-scripts\local-login.bat
-```
-
-В браузере: телефон, капча, SMS. Результат:
-
-- `data/session.json` — **обязательно на VPS**
-- `data/network_capture.json` — только для inspect на ПК
-
-### Allow-list API
-
-```bash
-source .venv/bin/activate
-voyah-monitor inspect
-```
-
-Скопируйте предложенные пути в `.env`:
-
-```env
-VOYAH_ALLOWED_GET_PATHS=...
-VOYAH_ALLOWED_POST_PATHS=...
-```
-
-На VPS `network_capture.json` **не нужен**, если пути уже в `.env`.
-
-### `.env` для прода
-
-Скопируйте `.env.example` → `.env` и заполните минимум:
-
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_ALLOWED_USER_IDS`
-- `VOYAH_ALLOWED_GET_PATHS` / `VOYAH_ALLOWED_POST_PATHS`
-
-`VOYAH_PHONE` на VPS не используется (только при login на ПК).
+В `.env` должны быть `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_IDS`, пути API.
 
 ---
 
-## 2. VPS: установка Docker и кода
+## Шаг 1. Один скрипт на VPS
 
-На сервере (Ubuntu/Debian пример):
+Скопируйте на сервер **один файл** из репозитория:
 
-```bash
-# Docker — официальная инструкция: https://docs.docker.com/engine/install/
+`scripts/vps/install.sh`
 
-sudo mkdir -p /opt/voyah-monitor
-sudo chown "$USER:$USER" /opt/voyah-monitor
-cd /opt/voyah-monitor
-
-# Клонирование (подставьте свой URL)
-export VOYAH_REPO_URL=https://github.com/YOUR_USER/VoyahMonitor.git
-git clone "$VOYAH_REPO_URL" .
-
-chmod +x scripts/prod/*.sh scripts/local-login.sh
-./scripts/prod/bootstrap.sh
-```
-
-Если репозиторий уже склонирован вручную, достаточно:
+Или скачайте по URL (подставьте свой fork при необходимости):
 
 ```bash
-cd /opt/voyah-monitor
-./scripts/prod/bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/he-heli/VoyahMonitor/main/scripts/vps/install.sh -o install.sh
+chmod +x install.sh
 ```
+
+Запуск (нужен root или sudo — ставит Docker и клонирует в `/opt/voyah-monitor`):
+
+```bash
+sudo ./install.sh
+```
+
+Переменные (опционально):
+
+```bash
+sudo VOYAH_REPO_URL=https://github.com/he-heli/VoyahMonitor.git \
+     VOYAH_INSTALL_DIR=/opt/voyah-monitor \
+     ./install.sh
+```
+
+Скрипт:
+
+1. Установит `git`, `curl` (Debian/Ubuntu через apt)
+2. Установит **Docker** и Compose, если их нет ([get.docker.com](https://get.docker.com))
+3. Клонирует репозиторий в `/opt/voyah-monitor`
+4. Создаст `data/`, шаблон `.env`, выставит права на скрипты
+5. Выведет инструкцию для следующих шагов
+
+Если вас добавили в группу `docker`, после install может понадобиться **повторный вход по SSH**.
 
 ---
 
-## 3. Перенос секретов на VPS
+## Шаг 2. Секреты на VPS
 
-С **локального ПК** (отредактируйте хост и путь):
+С **вашего ПК**:
 
 ```bash
 export VPS_USER=deploy
@@ -112,43 +76,44 @@ export REMOTE_DIR=/opt/voyah-monitor
 scp .env "${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}/.env"
 scp data/session.json "${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}/data/session.json"
 
-# Опционально: история и настройки бота
-# scp data/voyah_monitor.db data/bot_settings.json \
-#   "${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}/data/"
-
 ssh "${VPS_USER}@${VPS_HOST}" \
   "chmod 600 ${REMOTE_DIR}/.env ${REMOTE_DIR}/data/session.json"
 ```
 
 Шаблон: `scripts/prod/upload-secrets.example.sh`.
 
-**Никогда** не коммитьте `.env` и `data/session.json` в git.
-
 ---
 
-## 4. Запуск бота на VPS
+## Шаг 3. Первый запуск бота
+
+На VPS:
 
 ```bash
 cd /opt/voyah-monitor
-./scripts/prod/up.sh
+./first_start.sh
 ```
-
-| Скрипт | Назначение |
-|--------|------------|
-| `./scripts/prod/up.sh` | Сборка (slim) + запуск |
-| `./scripts/prod/down.sh` | Остановка |
-| `./scripts/prod/restart.sh` | Перезапуск |
-| `./scripts/prod/rebuild.sh` | Пересборка образа + запуск |
-| `./scripts/prod/logs.sh` | Логи |
-| `./scripts/prod/ps.sh` | Статус контейнеров |
-| `./scripts/prod/update.sh` | `git pull` |
-| `./scripts/prod/backup-data.sh` | Архив `data/*` |
 
 Проверка в Telegram: `/start`.
 
+Повторный запуск после остановки: `./scripts/prod/up.sh` (то же, что `first_start.sh`).
+
 ---
 
-## Обновление кода
+## Управление на VPS
+
+| Скрипт | Назначение |
+|--------|------------|
+| `./first_start.sh` | Первая сборка и запуск (нужны `.env` + `session.json`) |
+| `./scripts/prod/up.sh` | То же |
+| `./scripts/prod/down.sh` | Остановка |
+| `./scripts/prod/restart.sh` | Перезапуск |
+| `./scripts/prod/rebuild.sh` | Пересборка + запуск |
+| `./scripts/prod/logs.sh` | Логи |
+| `./scripts/prod/ps.sh` | Статус |
+| `./scripts/prod/update.sh` | `git pull` |
+| `./scripts/prod/backup-data.sh` | Бэкап `data/` |
+
+Обновление кода:
 
 ```bash
 cd /opt/voyah-monitor
@@ -160,7 +125,7 @@ cd /opt/voyah-monitor
 
 ## Обновление сессии (~90 дней)
 
-1. На ПК: `./scripts/local-login.sh`
+1. ПК: `./scripts/local-login.sh`
 2. `scp data/session.json` на VPS
 3. `./scripts/prod/restart.sh`
 
@@ -168,10 +133,9 @@ cd /opt/voyah-monitor
 
 ## Важно
 
-- **Не запускайте** бота локально и на VPS с **одним** `TELEGRAM_BOT_TOKEN`.
-- **Не используйте** `docker compose --profile login` на VPS — только local-login на ПК.
-- Prod-образ (`Dockerfile`) **без Playwright** — быстрая сборка и меньший размер.
-- Profile `login` в compose — только для разработки (`Dockerfile.login`).
+- **Не запускайте** бота на ПК и VPS с **одним** `TELEGRAM_BOT_TOKEN`.
+- Prod-образ **без Playwright** — login только локально.
+- Входящие порты на VPS не нужны (достаточно SSH).
 
 ## Firewall (пример)
 
@@ -179,5 +143,3 @@ cd /opt/voyah-monitor
 sudo ufw allow OpenSSH
 sudo ufw enable
 ```
-
-Дополнительные порты для Voyah Monitor не открывайте.
