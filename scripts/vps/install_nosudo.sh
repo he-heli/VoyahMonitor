@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# VoyahMonitor install_nosudo.sh v2 (self-contained, no lib.sh)
 # VoyahMonitor — bootstrap without sudo (self-contained single file).
 # Requires: git, curl, docker (current user), docker compose.
 #

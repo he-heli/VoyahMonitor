@@ -45,8 +45,13 @@ sudo ./install.sh
 ### B. Без sudo
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/he-heli/VoyahMonitor/main/scripts/vps/install_nosudo.sh -o install_nosudo.sh
+# Если CDN отдаёт старый файл — URL с коммитом или ?v=2:
+curl -fsSL "https://raw.githubusercontent.com/he-heli/VoyahMonitor/main/scripts/vps/install_nosudo.sh?v=$(date +%s)" -o install_nosudo.sh
+# или напрямую из git:
+# git clone --depth 1 https://github.com/he-heli/VoyahMonitor.git ~/voyah-monitor
+
 chmod +x install_nosudo.sh
+head -3 install_nosudo.sh   # должно быть: install_nosudo.sh v2
 ./install_nosudo.sh
 ```
 
