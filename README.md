@@ -110,7 +110,7 @@ docker compose --profile fetch run --rm voyah-fetch
 Пошаговое развёртывание: **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
 ```bash
-# на VPS (один файл из репо: scripts/vps/install.sh)
+# на VPS: install.sh (sudo) или install_nosudo.sh (Docker уже есть)
 sudo ./install.sh
 # scp .env и data/session.json с ПК
 cd /opt/voyah-monitor && ./first_start.sh

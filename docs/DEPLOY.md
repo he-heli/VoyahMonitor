@@ -27,24 +27,38 @@ source .venv/bin/activate && voyah-monitor inspect
 
 ## Шаг 1. Один скрипт на VPS
 
-Скопируйте на сервер **один файл** из репозитория:
+Два варианта (файлы в `scripts/vps/`):
 
-`scripts/vps/install.sh`
+| Скрипт | Когда использовать |
+|--------|-------------------|
+| **`install.sh`** | Чистый сервер: ставит Docker через **sudo**, клон в `/opt/voyah-monitor` |
+| **`install_nosudo.sh`** | Docker, git и `docker compose` уже есть, **sudo не нужен**; клон в `~/voyah-monitor` |
 
-Или скачайте по URL (подставьте свой fork при необходимости):
+### A. С sudo (по умолчанию)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/he-heli/VoyahMonitor/main/scripts/vps/install.sh -o install.sh
 chmod +x install.sh
-```
-
-Запуск (нужен root или sudo — ставит Docker и клонирует в `/opt/voyah-monitor`):
-
-```bash
 sudo ./install.sh
 ```
 
-Переменные (опционально):
+### B. Без sudo
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/he-heli/VoyahMonitor/main/scripts/vps/install_nosudo.sh -o install_nosudo.sh
+chmod +x install_nosudo.sh
+./install_nosudo.sh
+```
+
+Проверьте до запуска: `docker info` и `docker compose version` работают **от вашего пользователя**.
+
+Другой каталог (если есть права на `/opt`):
+
+```bash
+VOYAH_INSTALL_DIR=/opt/voyah-monitor ./install_nosudo.sh
+```
+
+Переменные для `install.sh` (опционально):
 
 ```bash
 sudo VOYAH_REPO_URL=https://github.com/he-heli/VoyahMonitor.git \
@@ -52,15 +66,9 @@ sudo VOYAH_REPO_URL=https://github.com/he-heli/VoyahMonitor.git \
      ./install.sh
 ```
 
-Скрипт:
+`install.sh`: apt-пакеты, Docker при необходимости, git clone, `data/`, шаблон `.env`.
 
-1. Установит `git`, `curl` (Debian/Ubuntu через apt)
-2. Установит **Docker** и Compose, если их нет ([get.docker.com](https://get.docker.com))
-3. Клонирует репозиторий в `/opt/voyah-monitor`
-4. Создаст `data/`, шаблон `.env`, выставит права на скрипты
-5. Выведет инструкцию для следующих шагов
-
-Если вас добавили в группу `docker`, после install может понадобиться **повторный вход по SSH**.
+После `install.sh` с добавлением в группу `docker` может понадобиться **повторный SSH**.
 
 ---
 
@@ -71,7 +79,7 @@ sudo VOYAH_REPO_URL=https://github.com/he-heli/VoyahMonitor.git \
 ```bash
 export VPS_USER=deploy
 export VPS_HOST=203.0.113.10
-export REMOTE_DIR=/opt/voyah-monitor
+export REMOTE_DIR=/opt/voyah-monitor   # или ~/voyah-monitor после install_nosudo.sh
 
 scp .env "${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}/.env"
 scp data/session.json "${VPS_USER}@${VPS_HOST}:${REMOTE_DIR}/data/session.json"
