@@ -50,6 +50,8 @@ chmod +x install_nosudo.sh
 ./install_nosudo.sh
 ```
 
+При запуске из `curl` скрипт сам подтянет `lib.sh` в ту же папку (рядом с `install_nosudo.sh`).
+
 Проверьте до запуска: `docker info` и `docker compose version` работают **от вашего пользователя**.
 
 Другой каталог (если есть права на `/opt`):

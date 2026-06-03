@@ -10,8 +10,19 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_VOYAH_LIB="${SCRIPT_DIR}/lib.sh"
+if [[ ! -f "${_VOYAH_LIB}" ]]; then
+  _VOYAH_RAW="${VOYAH_RAW_BASE:-https://raw.githubusercontent.com/he-heli/VoyahMonitor/main/scripts/vps}"
+  command -v curl >/dev/null 2>&1 || {
+    echo "Error: lib.sh not found next to this script and curl is unavailable." >&2
+    echo "Clone the repo or download lib.sh into ${SCRIPT_DIR}/" >&2
+    exit 1
+  }
+  echo "==> Downloading lib.sh ..."
+  curl -fsSL "${_VOYAH_RAW}/lib.sh" -o "${_VOYAH_LIB}"
+fi
 # shellcheck source=lib.sh
-source "${SCRIPT_DIR}/lib.sh"
+source "${_VOYAH_LIB}"
 
 VOYAH_INSTALL_DIR="${VOYAH_INSTALL_DIR:-${HOME}/voyah-monitor}"
 
