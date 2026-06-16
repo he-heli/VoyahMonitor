@@ -304,6 +304,23 @@ def test_dashboard_items_to_telemetry_extracts_extended_fields() -> None:
     assert telemetry.status == "Доступен"
 
 
+def test_dashboard_item_to_telemetry_detects_charging_from_chip() -> None:
+    item = {
+        "table": {"_id": "1", "sensors": {"battery": 60}},
+        "geo": {},
+        "detail": {},
+        "tbox": {
+            "sensors": {
+                "chip": {"title": "Заряжается"},
+                "sensorsData": {"batteryPercentage": 60},
+            },
+        },
+    }
+    telemetry = dashboard_items_to_telemetry([item])[0]
+    assert telemetry.is_charging is True
+    assert telemetry.battery_percent == 60.0
+
+
 def test_next_poll_delay_seconds_varies_within_jitter() -> None:
     base = 14400
     jitter = 0.25

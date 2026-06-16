@@ -7,7 +7,12 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from voyah_monitor.alert_settings import AlertConfig, V12_THRESHOLD_OPTIONS
+from voyah_monitor.alert_settings import (
+    AlertConfig,
+    CHARGE_MAX_PRESETS,
+    CHARGE_TRIGGER_OPTIONS,
+    V12_THRESHOLD_OPTIONS,
+)
 
 # --- Main menu (reply keyboard) ---
 
@@ -121,10 +126,15 @@ CB_ALERTS_PREFIX = "alerts:"
 CB_ALERTS_V12 = "alerts:v12"
 CB_ALERTS_CONNECT = "alerts:connect"
 CB_ALERTS_SOH = "alerts:soh"
+CB_ALERTS_CHARGE = "alerts:charge"
 CB_ALERTS_V12_TOGGLE = "alerts:v12:toggle"
 CB_ALERTS_CONNECT_TOGGLE = "alerts:connect:toggle"
 CB_ALERTS_SOH_TOGGLE = "alerts:soh:toggle"
+CB_ALERTS_CHARGE_TOGGLE = "alerts:charge:toggle"
 CB_ALERTS_V12_THR_PREFIX = "alerts:v12:thr:"
+CB_ALERTS_CHARGE_THR_PREFIX = "alerts:charge:thr:"
+CB_ALERTS_CHARGE_MAX_PREFIX = "alerts:charge:max:"
+CB_ALERTS_CHARGE_MAX_CUSTOM = "alerts:charge:max:custom"
 CB_ALERTS_BACK = "alerts:back"
 
 
@@ -144,6 +154,7 @@ def alerts_menu_keyboard(
     v12_enabled: bool,
     connect_enabled: bool,
     soh_enabled: bool,
+    charge_enabled: bool,
 ) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -161,6 +172,10 @@ def alerts_menu_keyboard(
                 InlineKeyboardButton(
                     text=f"{_status_emoji(soh_enabled)} SOH",
                     callback_data=CB_ALERTS_SOH,
+                ),
+                InlineKeyboardButton(
+                    text=f"{_status_emoji(charge_enabled)} Зарядка",
+                    callback_data=CB_ALERTS_CHARGE,
                 ),
             ],
         ]
@@ -259,6 +274,101 @@ def parse_v12_threshold_callback(data: str) -> float | None:
     return None
 
 
+def format_charge_alert_text(
+    enabled: bool,
+    trigger_percent: int,
+    max_percent: int,
+) -> str:
+    status = "включён" if enabled else "выключен"
+    return (
+        "⚡ Зарядка\n\n"
+        f"Контроль: {status}\n"
+        f"Триггер: +{trigger_percent}% — уведомление при росте заряда.\n"
+        f"Цель: {max_percent}% — прогноз до этой отметки.\n\n"
+        "Для точного контроля рекомендуем интервал опроса 5–30 мин в «Настройках».\n\n"
+        "Выберите параметры или включите/выключите контроль:"
+    )
+
+
+def charge_alert_keyboard(
+    enabled: bool,
+    trigger_percent: int,
+    max_percent: int,
+) -> InlineKeyboardMarkup:
+    toggle_text = "Выключить контроль" if enabled else "Включить контроль"
+    trigger_row: list[InlineKeyboardButton] = []
+    for value in CHARGE_TRIGGER_OPTIONS:
+        mark = " ✓" if value == trigger_percent else ""
+        trigger_row.append(
+            InlineKeyboardButton(
+                text=f"+{value}%{mark}",
+                callback_data=f"{CB_ALERTS_CHARGE_THR_PREFIX}{value}",
+            )
+        )
+    max_row: list[InlineKeyboardButton] = []
+    for value in CHARGE_MAX_PRESETS:
+        mark = " ✓" if value == max_percent else ""
+        max_row.append(
+            InlineKeyboardButton(
+                text=f"{value}%{mark}",
+                callback_data=f"{CB_ALERTS_CHARGE_MAX_PREFIX}{value}",
+            )
+        )
+    custom_mark = " ✓" if max_percent not in CHARGE_MAX_PRESETS else ""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=toggle_text, callback_data=CB_ALERTS_CHARGE_TOGGLE)],
+            trigger_row,
+            max_row,
+            [
+                InlineKeyboardButton(
+                    text=f"Своё значение{custom_mark}",
+                    callback_data=CB_ALERTS_CHARGE_MAX_CUSTOM,
+                )
+            ],
+            _nav_back_row(back_callback=CB_ALERTS_BACK),
+        ]
+    )
+
+
+def parse_charge_trigger_callback(data: str) -> int | None:
+    if not data.startswith(CB_ALERTS_CHARGE_THR_PREFIX):
+        return None
+    try:
+        value = int(data[len(CB_ALERTS_CHARGE_THR_PREFIX) :])
+    except ValueError:
+        return None
+    if value in CHARGE_TRIGGER_OPTIONS:
+        return value
+    return None
+
+
+def parse_charge_max_callback(data: str) -> int | None:
+    if not data.startswith(CB_ALERTS_CHARGE_MAX_PREFIX):
+        return None
+    token = data[len(CB_ALERTS_CHARGE_MAX_PREFIX) :]
+    if token == "custom":
+        return None
+    try:
+        value = int(token)
+    except ValueError:
+        return None
+    if 0 <= value <= 100:
+        return value
+    return None
+
+
+def parse_charge_max_input(text: str) -> int | None:
+    stripped = text.strip().replace(",", ".")
+    try:
+        value = int(float(stripped))
+    except ValueError:
+        return None
+    if 0 <= value <= 100:
+        return value
+    return None
+
+
 
 def format_bot_status_text(
     *,
@@ -283,6 +393,13 @@ def format_bot_status_text(
     if alerts.v12.enabled:
         v12_extra = f"порог {alerts.v12.normalized_threshold():g} V"
 
+    charge_extra = ""
+    if alerts.charging.enabled:
+        charge_extra = (
+            f"+{alerts.charging.normalized_trigger()}%, "
+            f"до {alerts.charging.normalized_max()}%"
+        )
+
     lines = [
         "VOYAH Monitor",
         "",
@@ -293,6 +410,7 @@ def format_bot_status_text(
         _ctrl("12V", alerts.v12.enabled, v12_extra),
         _ctrl("Connect", alerts.connect.enabled),
         _ctrl("SOH", alerts.soh.enabled),
+        _ctrl("Зарядка", alerts.charging.enabled, charge_extra),
         "",
         "Выберите действие кнопками ниже.",
     ]

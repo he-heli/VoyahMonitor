@@ -342,6 +342,23 @@ def _to_bool(value: Any) -> bool | None:
     return None
 
 
+def _detect_is_charging(metrics: dict[str, Any], tbox: dict[str, Any] | None) -> bool | None:
+    for key in ("isCharging", "charging", "chargeStatus", "chargingStatus"):
+        if key in metrics:
+            return _to_bool(metrics[key])
+    if isinstance(tbox, dict):
+        sensors = tbox.get("sensors")
+        if isinstance(sensors, dict):
+            chip = sensors.get("chip")
+            if isinstance(chip, dict):
+                title = chip.get("title")
+                if isinstance(title, str):
+                    lower = title.lower()
+                    if any(token in lower for token in ("заряд", "заряж", "charging")):
+                        return True
+    return None
+
+
 def dashboard_item_to_telemetry(item: dict[str, Any]) -> "VehicleTelemetry":
     from voyah_monitor.telemetry import VehicleTelemetry
 
@@ -377,6 +394,7 @@ def dashboard_item_to_telemetry(item: dict[str, Any]) -> "VehicleTelemetry":
         is_online=_to_bool(tbox.get("isOnline")) if tbox else None,
         location_sharing=_to_bool(table.get("locationStatus", detail.get("locationStatus"))),
         status=_status_chip(tbox),
+        is_charging=_detect_is_charging(metrics, tbox),
         raw=item,
     )
 

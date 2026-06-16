@@ -26,6 +26,9 @@ from voyah_monitor.bot_ui import (
     CB_ALERTS_CONNECT_TOGGLE,
     CB_ALERTS_SOH,
     CB_ALERTS_SOH_TOGGLE,
+    CB_ALERTS_CHARGE,
+    CB_ALERTS_CHARGE_TOGGLE,
+    CB_ALERTS_CHARGE_MAX_CUSTOM,
     CB_ALERTS_V12,
     CB_ALERTS_V12_TOGGLE,
     CB_POLL_PREFIX,
@@ -35,7 +38,9 @@ from voyah_monitor.bot_ui import (
     format_bot_status_text,
     format_history_menu_text,
     connect_alert_keyboard,
+    charge_alert_keyboard,
     format_alerts_menu_text,
+    format_charge_alert_text,
     format_connect_alert_text,
     format_poll_interval_label,
     format_settings_poll_text,
@@ -45,6 +50,9 @@ from voyah_monitor.bot_ui import (
     main_menu_keyboard,
     parse_history_callback_data,
     parse_poll_callback_data,
+    parse_charge_max_callback,
+    parse_charge_max_input,
+    parse_charge_trigger_callback,
     parse_v12_threshold_callback,
     settings_poll_keyboard,
     split_telegram_messages,
@@ -78,6 +86,7 @@ class BotRuntimeConfig:
         )
         if self._store.poll_interval not in POLL_INTERVAL_VALUES:
             self._store.poll_interval = settings.telegram_poll_interval
+        self.awaiting_charge_max_input = False
 
     @property
     def poll_interval(self) -> int:
@@ -134,7 +143,14 @@ async def _dispatch_alert_notifications(
         for notification in notifications:
             for user_id in user_ids:
                 try:
-                    await bot.send_message(user_id, notification.text)
+                    if notification.photo_png:
+                        photo = BufferedInputFile(
+                            notification.photo_png,
+                            filename="charging.png",
+                        )
+                        await bot.send_photo(user_id, photo, caption=notification.text)
+                    else:
+                        await bot.send_message(user_id, notification.text)
                 except Exception:
                     logger.exception(
                         "Failed to send alert %s to user %s",
@@ -181,7 +197,17 @@ async def _send_alerts_menu(message: Message, runtime: BotRuntimeConfig) -> None
             cfg.v12.enabled,
             cfg.connect.enabled,
             cfg.soh.enabled,
+            cfg.charging.enabled,
         ),
+    )
+
+
+def _charge_screen(cfg) -> tuple[str, Any]:
+    trigger = cfg.normalized_trigger()
+    max_pct = cfg.normalized_max()
+    return (
+        format_charge_alert_text(cfg.enabled, trigger, max_pct),
+        charge_alert_keyboard(cfg.enabled, trigger, max_pct),
     )
 
 
@@ -422,8 +448,20 @@ def create_dispatcher(
                     cfg.v12.enabled,
                     cfg.connect.enabled,
                     cfg.soh.enabled,
+                    cfg.charging.enabled,
                 ),
             )
+
+    @dp.callback_query(F.data == CB_ALERTS_CHARGE)
+    async def on_alerts_charge_open(callback: CallbackQuery) -> None:
+        if not await _guard_callback(callback):
+            return
+        runtime.awaiting_charge_max_input = False
+        cfg = runtime.alerts.charging
+        await callback.answer()
+        if callback.message:
+            text, keyboard = _charge_screen(cfg)
+            await callback.message.edit_text(text, reply_markup=keyboard)
 
     @dp.callback_query(F.data == CB_ALERTS_V12)
     async def on_alerts_v12_open(callback: CallbackQuery) -> None:
@@ -513,6 +551,64 @@ def create_dispatcher(
                 reply_markup=soh_alert_keyboard(cfg.enabled),
             )
 
+    @dp.callback_query(F.data == CB_ALERTS_CHARGE_TOGGLE)
+    async def on_alerts_charge_toggle(callback: CallbackQuery) -> None:
+        if not await _guard_callback(callback):
+            return
+        cfg = runtime.alerts.charging
+        cfg.enabled = not cfg.enabled
+        if not cfg.enabled:
+            runtime.alerts.state.charging_sessions.clear()
+        runtime.save()
+        label = "включён" if cfg.enabled else "выключен"
+        await callback.answer(f"Зарядка: {label}")
+        if callback.message:
+            text, keyboard = _charge_screen(cfg)
+            await callback.message.edit_text(text, reply_markup=keyboard)
+
+    @dp.callback_query(F.data.startswith("alerts:charge:thr:"))
+    async def on_alerts_charge_trigger(callback: CallbackQuery) -> None:
+        if not await _guard_callback(callback):
+            return
+        trigger = parse_charge_trigger_callback(callback.data or "")
+        if trigger is None:
+            await callback.answer("Неверный триггер.", show_alert=True)
+            return
+        cfg = runtime.alerts.charging
+        cfg.trigger_percent = trigger
+        runtime.save()
+        await callback.answer(f"Триггер: +{trigger}%")
+        if callback.message:
+            text, keyboard = _charge_screen(cfg)
+            await callback.message.edit_text(text, reply_markup=keyboard)
+
+    @dp.callback_query(F.data.startswith("alerts:charge:max:"))
+    async def on_alerts_charge_max(callback: CallbackQuery) -> None:
+        if not await _guard_callback(callback):
+            return
+        data = callback.data or ""
+        if data == CB_ALERTS_CHARGE_MAX_CUSTOM:
+            runtime.awaiting_charge_max_input = True
+            await callback.answer()
+            if callback.message:
+                await callback.message.answer(
+                    "Введите целевой заряд от 0 до 100 (например, 95):",
+                    reply_markup=main_menu_keyboard(),
+                )
+            return
+        max_pct = parse_charge_max_callback(data)
+        if max_pct is None:
+            await callback.answer("Неверное значение.", show_alert=True)
+            return
+        runtime.awaiting_charge_max_input = False
+        cfg = runtime.alerts.charging
+        cfg.max_percent = max_pct
+        runtime.save()
+        await callback.answer(f"Цель: {max_pct}%")
+        if callback.message:
+            text, keyboard = _charge_screen(cfg)
+            await callback.message.edit_text(text, reply_markup=keyboard)
+
     @dp.callback_query(F.data.startswith("alerts:v12:thr:"))
     async def on_alerts_v12_threshold(callback: CallbackQuery) -> None:
         if not await _guard_callback(callback):
@@ -536,6 +632,25 @@ def create_dispatcher(
         if not _authorized(settings, message.from_user.id):
             return
         if message.text in MENU_BUTTONS:
+            return
+        if runtime.awaiting_charge_max_input and message.text:
+            max_pct = parse_charge_max_input(message.text)
+            if max_pct is None:
+                await message.answer(
+                    "Нужно число от 0 до 100. Попробуйте снова или откройте «Контроль параметров».",
+                    reply_markup=main_menu_keyboard(),
+                )
+                return
+            runtime.awaiting_charge_max_input = False
+            cfg = runtime.alerts.charging
+            cfg.max_percent = max_pct
+            runtime.save()
+            text, keyboard = _charge_screen(cfg)
+            await message.answer(
+                f"Цель зарядки: {max_pct}%",
+                reply_markup=main_menu_keyboard(),
+            )
+            await message.answer(text, reply_markup=keyboard)
             return
         await _send_main_status(message, runtime, storage, jitter)
 
