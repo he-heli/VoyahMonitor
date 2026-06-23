@@ -65,8 +65,10 @@ def export_history_xlsx(
     storage: TelemetryStorage,
     *,
     days: int | None = None,
+    snapshots: list[SnapshotRecord] | None = None,
 ) -> bytes:
-    snapshots = storage.snapshots_in_range(days=days)
+    if snapshots is None:
+        snapshots = storage.snapshots_in_range(days=days)
     mileage_rows = _filter_mileage(storage.all_daily_mileage(), days=days)
 
     workbook = Workbook()
@@ -77,7 +79,8 @@ def export_history_xlsx(
         cell.font = Font(bold=True)
     for record in snapshots:
         snapshots_sheet.append(_snapshot_row(record))
-    _autosize_sheet(snapshots_sheet)
+    if len(snapshots) <= 200:
+        _autosize_sheet(snapshots_sheet)
 
     mileage_sheet = workbook.create_sheet("Пробег по дням")
     mileage_sheet.append(MILEAGE_HEADERS)
@@ -85,7 +88,8 @@ def export_history_xlsx(
         cell.font = Font(bold=True)
     for row in mileage_rows:
         mileage_sheet.append(_mileage_row(row))
-    _autosize_sheet(mileage_sheet)
+    if len(mileage_rows) <= 200:
+        _autosize_sheet(mileage_sheet)
 
     buffer = io.BytesIO()
     workbook.save(buffer)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from voyah_monitor.telemetry import VehicleTelemetry
@@ -205,6 +205,10 @@ class TelemetryStorage:
             raw=json.loads(row["raw_json"]),
         )
 
+    @staticmethod
+    def _cutoff_iso(days: int) -> str:
+        return (datetime.now(UTC) - timedelta(days=days)).isoformat()
+
     def snapshots_in_range(
         self,
         *,
@@ -217,8 +221,8 @@ class TelemetryStorage:
             where_parts.append("vehicle_key = ?")
             params.append(vehicle_key)
         if days is not None:
-            where_parts.append("captured_at >= datetime('now', ?)")
-            params.append(f"-{days} days")
+            where_parts.append("captured_at >= ?")
+            params.append(self._cutoff_iso(days))
         where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         query = f"""
             SELECT * FROM telemetry_snapshots
@@ -349,11 +353,11 @@ class TelemetryStorage:
             FROM telemetry_snapshots
             WHERE battery_percent IS NOT NULL
             {vehicle_filter}
-            AND captured_at >= datetime('now', ?)
+            AND captured_at >= ?
             ORDER BY captured_at ASC
         """
         vehicle_filter = ""
-        params: list[object] = [f"-{days} days"]
+        params: list[object] = [self._cutoff_iso(days)]
         if vehicle_key:
             vehicle_filter = "AND vehicle_key = ?"
             params.insert(0, vehicle_key)

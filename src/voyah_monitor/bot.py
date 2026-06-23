@@ -414,8 +414,12 @@ def create_dispatcher(
                     reply_markup=main_menu_keyboard(),
                 )
                 return
+            await target.answer(
+                f"Формирую Excel: {len(records)} снимков, подождите…",
+                reply_markup=main_menu_keyboard(),
+            )
             file_bytes = await asyncio.to_thread(
-                lambda: export_history_xlsx(storage, days=days),
+                lambda: export_history_xlsx(storage, days=days, snapshots=records),
             )
         except Exception as exc:
             logger.exception("History export failed")
