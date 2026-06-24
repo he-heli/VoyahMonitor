@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, FSInputFile, Message
 
 from voyah_monitor.alert_settings import BotSettingsStore
 from voyah_monitor.alerts import evaluate_alerts
@@ -61,7 +63,7 @@ from voyah_monitor.bot_ui import (
     yandex_maps_keyboard,
 )
 from voyah_monitor.config import Settings
-from voyah_monitor.history_export import export_filename, export_history_xlsx, period_label
+from voyah_monitor.history_export import export_filename, export_history_xlsx_to_path, period_label
 from voyah_monitor.scheduling import next_poll_delay_seconds
 from voyah_monitor.session_manager import SessionExpiredError
 from voyah_monitor.storage import TelemetryStorage
@@ -407,31 +409,42 @@ def create_dispatcher(
             return
 
         try:
-            records = await asyncio.to_thread(lambda: storage.snapshots_in_range(days=days))
-            if not records:
+            count = await asyncio.to_thread(storage.snapshots_count_in_range, days=days)
+            if count == 0:
                 await target.answer(
                     f"Нет снимков {period_label(days)}.",
                     reply_markup=main_menu_keyboard(),
                 )
                 return
             await target.answer(
-                f"Формирую Excel: {len(records)} снимков, подождите…",
+                f"Формирую Excel: {count} снимков, подождите…",
                 reply_markup=main_menu_keyboard(),
             )
-            file_bytes = await asyncio.to_thread(
-                lambda: export_history_xlsx(storage, days=days, snapshots=records),
-            )
+            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as handle:
+                export_path = Path(handle.name)
+            try:
+                await asyncio.to_thread(
+                    export_history_xlsx_to_path,
+                    storage,
+                    export_path,
+                    days=days,
+                )
+            except Exception:
+                export_path.unlink(missing_ok=True)
+                raise
         except Exception as exc:
             logger.exception("History export failed")
             await target.answer(f"Ошибка экспорта: {exc}", reply_markup=main_menu_keyboard())
             return
 
         filename = export_filename(days=days)
-        document = BufferedInputFile(file_bytes, filename=filename)
-        await target.answer_document(
-            document,
-            caption=f"История {period_label(days)} ({len(records)} снимков)",
-        )
+        try:
+            await target.answer_document(
+                FSInputFile(export_path, filename=filename),
+                caption=f"История {period_label(days)} ({count} снимков)",
+            )
+        finally:
+            export_path.unlink(missing_ok=True)
 
     @dp.message(F.text == BTN_ALERTS)
     async def on_alerts(message: Message) -> None:

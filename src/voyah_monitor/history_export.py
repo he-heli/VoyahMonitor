@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import io
+import tempfile
+from collections.abc import Iterator
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
-from openpyxl.styles import Font
 
 from voyah_monitor.storage import DailyMileage, SnapshotRecord, TelemetryStorage
 from voyah_monitor.vehicle_status import SNAPSHOT_EXPORT_DATA_HEADERS, snapshot_export_field_map
@@ -51,14 +52,45 @@ def _mileage_row(row: DailyMileage) -> list[Any]:
     ]
 
 
-def _autosize_sheet(ws: Any) -> None:
-    for column_cells in ws.columns:
-        letter = column_cells[0].column_letter
-        max_length = 0
-        for cell in column_cells:
-            if cell.value is not None:
-                max_length = max(max_length, len(str(cell.value)))
-        ws.column_dimensions[letter].width = min(max_length + 2, 40)
+def _snapshot_source(
+    storage: TelemetryStorage,
+    *,
+    days: int | None,
+    snapshots: list[SnapshotRecord] | None,
+) -> Iterator[SnapshotRecord]:
+    if snapshots is not None:
+        yield from snapshots
+        return
+    yield from storage.iter_snapshots_in_range(days=days)
+
+
+def export_history_xlsx_to_path(
+    storage: TelemetryStorage,
+    dest: Path,
+    *,
+    days: int | None = None,
+    snapshots: list[SnapshotRecord] | None = None,
+) -> int:
+    """Stream rows to disk; returns snapshot count written."""
+    mileage_rows = _filter_mileage(storage.all_daily_mileage(), days=days)
+    snapshot_iter = _snapshot_source(storage, days=days, snapshots=snapshots)
+
+    workbook = Workbook(write_only=True)
+    snapshots_sheet = workbook.create_sheet("Снимки")
+    snapshots_sheet.append(SNAPSHOT_HEADERS)
+    count = 0
+    for record in snapshot_iter:
+        snapshots_sheet.append(_snapshot_row(record))
+        count += 1
+
+    mileage_sheet = workbook.create_sheet("Пробег по дням")
+    mileage_sheet.append(MILEAGE_HEADERS)
+    for row in mileage_rows:
+        mileage_sheet.append(_mileage_row(row))
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(dest)
+    return count
 
 
 def export_history_xlsx(
@@ -66,34 +98,19 @@ def export_history_xlsx(
     *,
     days: int | None = None,
     snapshots: list[SnapshotRecord] | None = None,
+    dest: Path | None = None,
 ) -> bytes:
-    if snapshots is None:
-        snapshots = storage.snapshots_in_range(days=days)
-    mileage_rows = _filter_mileage(storage.all_daily_mileage(), days=days)
+    if dest is not None:
+        export_history_xlsx_to_path(storage, dest, days=days, snapshots=snapshots)
+        return dest.read_bytes()
 
-    workbook = Workbook()
-    snapshots_sheet = workbook.active
-    snapshots_sheet.title = "Снимки"
-    snapshots_sheet.append(SNAPSHOT_HEADERS)
-    for cell in snapshots_sheet[1]:
-        cell.font = Font(bold=True)
-    for record in snapshots:
-        snapshots_sheet.append(_snapshot_row(record))
-    if len(snapshots) <= 200:
-        _autosize_sheet(snapshots_sheet)
-
-    mileage_sheet = workbook.create_sheet("Пробег по дням")
-    mileage_sheet.append(MILEAGE_HEADERS)
-    for cell in mileage_sheet[1]:
-        cell.font = Font(bold=True)
-    for row in mileage_rows:
-        mileage_sheet.append(_mileage_row(row))
-    if len(mileage_rows) <= 200:
-        _autosize_sheet(mileage_sheet)
-
-    buffer = io.BytesIO()
-    workbook.save(buffer)
-    return buffer.getvalue()
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as handle:
+        path = Path(handle.name)
+    try:
+        export_history_xlsx_to_path(storage, path, days=days, snapshots=snapshots)
+        return path.read_bytes()
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def export_filename(*, days: int | None = None) -> str:

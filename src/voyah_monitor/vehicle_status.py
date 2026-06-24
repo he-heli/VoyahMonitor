@@ -686,6 +686,54 @@ def is_dashboard_snapshot_raw(raw: Any) -> bool:
     return isinstance(raw, dict) and any(key in raw for key in ("table", "tbox", "detail", "geo"))
 
 
+def compact_dashboard_raw(item: dict[str, Any]) -> dict[str, Any]:
+    """Drop unused API bulk (e.g. tbox.buttons ~70 KB) before persisting to SQLite."""
+    if not is_dashboard_snapshot_raw(item):
+        return item
+
+    slim_tbox: dict[str, Any] | None = None
+    tbox = item.get("tbox")
+    if isinstance(tbox, dict):
+        slim_tbox = {}
+        for key in (
+            "isOnline",
+            "isCentralLockingOn",
+            "isParked",
+            "lastOnlineTime",
+            "preparation_script",
+        ):
+            if key in tbox:
+                slim_tbox[key] = tbox[key]
+        sensors = tbox.get("sensors")
+        if isinstance(sensors, dict):
+            slim_sensors: dict[str, Any] = {}
+            for key in (
+                "chip",
+                "sensorsData",
+                "positionData",
+                "battery",
+                "v12",
+                "odometer",
+                "remain",
+                "lastSensorsRecieved",
+            ):
+                if key in sensors:
+                    slim_sensors[key] = sensors[key]
+            if slim_sensors:
+                slim_tbox["sensors"] = slim_sensors
+
+    compacted: dict[str, Any] = {
+        "table": item.get("table") if isinstance(item.get("table"), dict) else {},
+        "geo": item.get("geo") if isinstance(item.get("geo"), dict) else {},
+        "detail": item.get("detail") if isinstance(item.get("detail"), dict) else {},
+        "drivers": item.get("drivers"),
+        "maintenance": item.get("maintenance") if isinstance(item.get("maintenance"), dict) else {},
+    }
+    if slim_tbox:
+        compacted["tbox"] = slim_tbox
+    return compacted
+
+
 def merge_dashboard_export_fields(item: dict[str, Any]) -> dict[str, Any]:
     """Flat fields for history export — same labels as format_vehicle_dashboard sections."""
     table = item.get("table") if isinstance(item.get("table"), dict) else {}

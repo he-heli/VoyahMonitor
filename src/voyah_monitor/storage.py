@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from voyah_monitor.telemetry import VehicleTelemetry
+from voyah_monitor.vehicle_status import compact_dashboard_raw, is_dashboard_snapshot_raw
 
 
 @dataclass
@@ -139,10 +141,16 @@ class TelemetryStorage:
                     telemetry.status,
                     1 if telemetry.is_charging else 0 if telemetry.is_charging is not None else None,
                     telemetry.v12_voltage,
-                    json.dumps(telemetry.raw, ensure_ascii=False),
+                    json.dumps(self._persisted_raw(telemetry.raw), ensure_ascii=False),
                 ),
             )
             self._update_daily_mileage(conn, key, telemetry)
+
+    @staticmethod
+    def _persisted_raw(raw: dict) -> dict:
+        if is_dashboard_snapshot_raw(raw):
+            return compact_dashboard_raw(raw)
+        return raw
 
     def _update_daily_mileage(
         self,
@@ -209,12 +217,12 @@ class TelemetryStorage:
     def _cutoff_iso(days: int) -> str:
         return (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
-    def snapshots_in_range(
+    def _snapshots_where(
         self,
         *,
         days: int | None = None,
         vehicle_key: str | None = None,
-    ) -> list[SnapshotRecord]:
+    ) -> tuple[str, list[object]]:
         where_parts: list[str] = []
         params: list[object] = []
         if vehicle_key:
@@ -224,21 +232,76 @@ class TelemetryStorage:
             where_parts.append("captured_at >= ?")
             params.append(self._cutoff_iso(days))
         where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        return where, params
+
+    def snapshots_count_in_range(
+        self,
+        *,
+        days: int | None = None,
+        vehicle_key: str | None = None,
+    ) -> int:
+        where, params = self._snapshots_where(days=days, vehicle_key=vehicle_key)
+        query = f"SELECT COUNT(*) AS count FROM telemetry_snapshots {where}"
+        with self._connect() as conn:
+            row = conn.execute(query, params).fetchone()
+            return int(row["count"]) if row else 0
+
+    def iter_snapshots_in_range(
+        self,
+        *,
+        days: int | None = None,
+        vehicle_key: str | None = None,
+    ) -> Iterator[SnapshotRecord]:
+        where, params = self._snapshots_where(days=days, vehicle_key=vehicle_key)
         query = f"""
             SELECT * FROM telemetry_snapshots
             {where}
             ORDER BY captured_at ASC, id ASC
         """
         with self._connect() as conn:
-            rows = conn.execute(query, params).fetchall()
-        return [
-            SnapshotRecord(
-                id=row["id"],
-                vehicle_key=row["vehicle_key"],
-                telemetry=self._row_to_telemetry(row),
+            cursor = conn.execute(query, params)
+            for row in cursor:
+                yield SnapshotRecord(
+                    id=row["id"],
+                    vehicle_key=row["vehicle_key"],
+                    telemetry=self._row_to_telemetry(row),
+                )
+
+    def snapshots_in_range(
+        self,
+        *,
+        days: int | None = None,
+        vehicle_key: str | None = None,
+    ) -> list[SnapshotRecord]:
+        return list(self.iter_snapshots_in_range(days=days, vehicle_key=vehicle_key))
+
+    def compact_stored_raw_json(self) -> tuple[int, int]:
+        """Rewrite raw_json blobs to slim form. Returns (updated_rows, bytes_before)."""
+        bytes_before = 0
+        updated = 0
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "SELECT id, raw_json FROM telemetry_snapshots ORDER BY id ASC"
             )
-            for row in rows
-        ]
+            for row in cursor:
+                raw = json.loads(row["raw_json"])
+                if not is_dashboard_snapshot_raw(raw):
+                    continue
+                compacted = compact_dashboard_raw(raw)
+                old_size = len(row["raw_json"])
+                new_blob = json.dumps(compacted, ensure_ascii=False)
+                if new_blob == row["raw_json"]:
+                    continue
+                bytes_before += old_size
+                conn.execute(
+                    "UPDATE telemetry_snapshots SET raw_json = ? WHERE id = ?",
+                    (new_blob, row["id"]),
+                )
+                updated += 1
+        if updated:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("VACUUM")
+        return updated, bytes_before
 
     def all_snapshots(self, vehicle_key: str | None = None) -> list[SnapshotRecord]:
         query = """

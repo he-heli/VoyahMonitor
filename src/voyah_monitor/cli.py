@@ -101,6 +101,16 @@ def cmd_status(settings: Settings) -> int:
     return 0
 
 
+def cmd_compact_db(settings: Settings) -> int:
+    storage = TelemetryStorage(settings.voyah_db_path)
+    before_mb = storage.db_path.stat().st_size / 1024 / 1024
+    updated, _ = storage.compact_stored_raw_json()
+    after_mb = storage.db_path.stat().st_size / 1024 / 1024
+    print(f"Compacted {updated} snapshots")
+    print(f"Database: {before_mb:.1f} MB -> {after_mb:.1f} MB")
+    return 0
+
+
 def cmd_bot(settings: Settings) -> int:
     asyncio.run(run_bot(settings))
     return 0
@@ -114,6 +124,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("inspect", help="Show captured network requests and suggested allow-list")
     subparsers.add_parser("fetch", help="Fetch telemetry using read-only allow-list")
     subparsers.add_parser("status", help="Show live vehicle fields from VOYAH dashboard (read-only)")
+    subparsers.add_parser(
+        "compact-db",
+        help="Shrink stored raw_json blobs (drops unused API fields) and VACUUM",
+    )
     subparsers.add_parser("bot", help="Run Telegram bot")
 
     return parser
@@ -129,6 +143,7 @@ def main() -> None:
         "inspect": cmd_inspect,
         "fetch": cmd_fetch,
         "status": cmd_status,
+        "compact-db": cmd_compact_db,
         "bot": cmd_bot,
     }
     exit_code = commands[args.command](settings)
