@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from io import BytesIO
-from zoneinfo import ZoneInfo
 
 import matplotlib
 
@@ -11,7 +10,7 @@ matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 
-MSK = ZoneInfo("Europe/Moscow")
+from voyah_monitor.timeutil import MSK
 
 
 def render_charging_chart(

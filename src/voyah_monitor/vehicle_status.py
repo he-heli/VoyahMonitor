@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from voyah_monitor.timeutil import format_moscow
+
 
 def _get_nested(data: dict[str, Any], *path: str) -> Any:
     current: Any = data
@@ -31,7 +33,9 @@ def _format_datetime(value: Any) -> str | None:
     try:
         if isinstance(value, str):
             dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            return format_moscow(dt)
+        if isinstance(value, datetime):
+            return format_moscow(value)
     except ValueError:
         return str(value)
     return str(value)

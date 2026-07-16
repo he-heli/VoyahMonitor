@@ -120,8 +120,10 @@ def normalize_payload(payload: Any) -> list[VehicleTelemetry]:
 
 
 def format_status(telemetry: VehicleTelemetry) -> str:
+    from voyah_monitor.timeutil import format_moscow
+
     lines = [
-        f"Время: {telemetry.captured_at.astimezone().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Время: {format_moscow(telemetry.captured_at)}",
     ]
     if telemetry.name:
         lines.append(f"Автомобиль: {telemetry.name}")

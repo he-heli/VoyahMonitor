@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import Iterator
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
 
 from voyah_monitor.storage import DailyMileage, SnapshotRecord, TelemetryStorage
+from voyah_monitor.timeutil import format_moscow, moscow_date, moscow_now
 from voyah_monitor.vehicle_status import SNAPSHOT_EXPORT_DATA_HEADERS, snapshot_export_field_map
 
 
@@ -22,11 +22,10 @@ def _export_cell(value: Any) -> Any:
 
 def _snapshot_row(record: SnapshotRecord) -> list[Any]:
     telemetry = record.telemetry
-    captured_local = telemetry.captured_at.astimezone()
     fields = snapshot_export_field_map(telemetry)
     return [
         record.id,
-        captured_local.strftime("%Y-%m-%d %H:%M:%S"),
+        format_moscow(telemetry.captured_at),
         *[_export_cell(fields.get(header)) for header in SNAPSHOT_EXPORT_DATA_HEADERS],
     ]
 
@@ -114,7 +113,7 @@ def export_history_xlsx(
 
 
 def export_filename(*, days: int | None = None) -> str:
-    stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M")
+    stamp = moscow_now().strftime("%Y%m%d_%H%M")
     if days is None:
         return f"voyah_history_all_{stamp}.xlsx"
     return f"voyah_history_{days}d_{stamp}.xlsx"
@@ -134,8 +133,7 @@ def period_label(days: int | None) -> str:
 def _filter_mileage(rows: list[DailyMileage], *, days: int | None) -> list[DailyMileage]:
     if days is None:
         return rows
-    cutoff = datetime.now().astimezone().date()
     from datetime import timedelta
 
-    min_day = cutoff - timedelta(days=days)
+    min_day = moscow_date() - timedelta(days=days)
     return [row for row in rows if row.day >= min_day]

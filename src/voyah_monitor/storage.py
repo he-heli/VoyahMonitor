@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from voyah_monitor.telemetry import VehicleTelemetry
+from voyah_monitor.timeutil import moscow_date
 from voyah_monitor.vehicle_status import compact_dashboard_raw, is_dashboard_snapshot_raw
 
 
@@ -161,7 +162,7 @@ class TelemetryStorage:
         if telemetry.odometer_km is None:
             return
 
-        day = telemetry.captured_at.astimezone().date().isoformat()
+        day = moscow_date(telemetry.captured_at).isoformat()
         row = conn.execute(
             "SELECT start_odometer_km, end_odometer_km FROM daily_mileage WHERE day = ? AND vehicle_key = ?",
             (day, vehicle_key),

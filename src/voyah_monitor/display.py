@@ -4,6 +4,7 @@ import json
 
 from voyah_monitor.storage import DailyMileage, SnapshotRecord
 from voyah_monitor.telemetry import VehicleTelemetry
+from voyah_monitor.timeutil import format_moscow
 
 
 def _format_value(label: str, value: object) -> str | None:
@@ -20,7 +21,7 @@ def format_snapshot_record(record: SnapshotRecord) -> str:
     telemetry = record.telemetry
     lines = [
         f"[#{record.id}] vehicle_key={record.vehicle_key}",
-        f"Время: {telemetry.captured_at.astimezone().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Время: {format_moscow(telemetry.captured_at)}",
     ]
 
     for label, value in (

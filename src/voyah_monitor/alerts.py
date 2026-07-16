@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 from voyah_monitor.alert_settings import (
     AlertConfig,
@@ -12,8 +11,7 @@ from voyah_monitor.alert_settings import (
 )
 from voyah_monitor.charging_chart import parse_point_timestamp, render_charging_chart
 from voyah_monitor.telemetry import VehicleTelemetry
-
-MSK = ZoneInfo("Europe/Moscow")
+from voyah_monitor.timeutil import format_moscow
 
 
 @dataclass(frozen=True)
@@ -75,8 +73,7 @@ def _format_duration(seconds: float) -> str:
 
 
 def _format_moscow_time(when: datetime) -> str:
-    local = when.astimezone(MSK)
-    return local.strftime("%d.%m.%Y %H:%M")
+    return format_moscow(when, fmt="%d.%m.%Y %H:%M")
 
 
 def _sec_per_percent(points: list[tuple[str, float]]) -> float | None:
