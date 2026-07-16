@@ -89,6 +89,8 @@ class BotSettingsStore:
         self._default_poll_interval = default_poll_interval
         self.poll_interval = default_poll_interval
         self.alerts = AlertConfig()
+        # exp_unix_str -> list of days_left already notified (1/2/3)
+        self.session_expiry_notified: dict[str, list[int]] = {}
         self._load()
 
     def _load(self) -> None:
@@ -116,6 +118,16 @@ class BotSettingsStore:
         if isinstance(state_raw, dict):
             self.alerts.state = _parse_alert_state(state_raw)
 
+        expiry_raw = raw.get("session_expiry_notified")
+        if isinstance(expiry_raw, dict):
+            parsed: dict[str, list[int]] = {}
+            for key, days in expiry_raw.items():
+                if isinstance(days, list):
+                    parsed[str(key)] = [
+                        int(day) for day in days if isinstance(day, (int, float))
+                    ]
+            self.session_expiry_notified = parsed
+
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -138,6 +150,7 @@ class BotSettingsStore:
                 },
             },
             "alert_state": _serialize_alert_state(self.alerts.state),
+            "session_expiry_notified": self.session_expiry_notified,
         }
         self._path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",

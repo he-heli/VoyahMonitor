@@ -65,6 +65,12 @@ from voyah_monitor.bot_ui import (
 from voyah_monitor.config import Settings
 from voyah_monitor.history_export import export_filename, export_history_xlsx_to_path, period_label
 from voyah_monitor.scheduling import next_poll_delay_seconds
+from voyah_monitor.session_expiry import (
+    exp_key,
+    format_session_expiry_message,
+    load_refresh_expires_at,
+    should_notify_session_expiry,
+)
 from voyah_monitor.session_manager import SessionExpiredError
 from voyah_monitor.storage import TelemetryStorage
 from voyah_monitor.telemetry import VehicleTelemetry, dashboard_items_to_telemetry
@@ -102,6 +108,10 @@ class BotRuntimeConfig:
     def alerts(self):
         return self._store.alerts
 
+    @property
+    def session_expiry_notified(self) -> dict[str, list[int]]:
+        return self._store.session_expiry_notified
+
     def set_poll_interval(self, seconds: int) -> None:
         if seconds not in POLL_INTERVAL_VALUES:
             raise ValueError(f"unsupported poll interval: {seconds}")
@@ -127,6 +137,49 @@ def _fetch_and_save(settings: Settings, storage: TelemetryStorage) -> list[Vehic
     for telemetry in telemetries:
         storage.save_snapshot(telemetry)
     return telemetries
+
+
+async def _dispatch_session_expiry_reminders(
+    bot: Bot,
+    settings: Settings,
+    runtime: BotRuntimeConfig,
+) -> None:
+    user_ids = settings.telegram_user_ids
+    if not user_ids:
+        return
+
+    expires_at = await asyncio.to_thread(
+        load_refresh_expires_at,
+        settings.voyah_session_path,
+        settings.voyah_base_url,
+    )
+    if expires_at is None:
+        return
+
+    key = exp_key(expires_at)
+    already = list(runtime.session_expiry_notified.get(key, []))
+    days_left = should_notify_session_expiry(
+        expires_at=expires_at,
+        notified_for_exp=already,
+    )
+    if days_left is None:
+        return
+
+    text = format_session_expiry_message(days_left, expires_at)
+    for user_id in user_ids:
+        try:
+            await bot.send_message(user_id, text)
+        except Exception:
+            logger.exception(
+                "Failed to send session expiry reminder (%s days) to user %s",
+                days_left,
+                user_id,
+            )
+
+    already.append(days_left)
+    runtime.session_expiry_notified[key] = sorted(set(already))
+    runtime.save()
+    logger.info("Session expiry reminder sent: %s days left", days_left)
 
 
 async def _dispatch_alert_notifications(
@@ -701,6 +754,16 @@ async def run_bot(settings: Settings) -> None:
             except Exception:
                 logger.exception("Periodic telemetry collection failed")
 
+    async def periodic_session_expiry_check() -> None:
+        logger.info("Session expiry reminders: hourly check from 10:00 MSK (3/2/1 days)")
+        while True:
+            try:
+                await _dispatch_session_expiry_reminders(bot, settings, runtime)
+            except Exception:
+                logger.exception("Session expiry reminder check failed")
+            await asyncio.sleep(3600)
+
     logger.info("Starting Telegram bot...")
     asyncio.create_task(periodic_collect())
+    asyncio.create_task(periodic_session_expiry_check())
     await dp.start_polling(bot)
