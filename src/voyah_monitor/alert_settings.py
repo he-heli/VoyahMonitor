@@ -59,7 +59,8 @@ class ChargingSessionState:
     active: bool = False
     last_notified_percent: float | None = None
     last_seen_percent: float | None = None
-    points: list[tuple[str, float]] = field(default_factory=list)
+    # (iso timestamp, soc %, battery temp °C or None)
+    points: list[tuple[str, float, float | None]] = field(default_factory=list)
 
 
 @dataclass
@@ -161,11 +162,19 @@ class BotSettingsStore:
 def _serialize_alert_state(state: AlertState) -> dict[str, Any]:
     sessions: dict[str, Any] = {}
     for key, session in state.charging_sessions.items():
+        serialized_points: list[list[object]] = []
+        for point in session.points:
+            ts, soc = point[0], point[1]
+            temp = point[2] if len(point) > 2 else None
+            row: list[object] = [ts, soc]
+            if temp is not None:
+                row.append(temp)
+            serialized_points.append(row)
         sessions[key] = {
             "active": session.active,
             "last_notified_percent": session.last_notified_percent,
             "last_seen_percent": session.last_seen_percent,
-            "points": [[ts, soc] for ts, soc in session.points],
+            "points": serialized_points,
         }
     return {
         "v12_low_active": state.v12_low_active,
@@ -213,15 +222,24 @@ def _parse_alert_config(raw: dict[str, Any]) -> AlertConfig:
 
 
 def _parse_charging_session(raw: dict[str, Any]) -> ChargingSessionState:
-    points: list[tuple[str, float]] = []
+    points: list[tuple[str, float, float | None]] = []
     raw_points = raw.get("points")
     if isinstance(raw_points, list):
         for item in raw_points:
-            if isinstance(item, (list, tuple)) and len(item) == 2:
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                continue
+            try:
+                ts = str(item[0])
+                soc = float(item[1])
+            except (TypeError, ValueError):
+                continue
+            temp: float | None = None
+            if len(item) >= 3 and item[2] is not None:
                 try:
-                    points.append((str(item[0]), float(item[1])))
+                    temp = float(item[2])
                 except (TypeError, ValueError):
-                    continue
+                    temp = None
+            points.append((ts, soc, temp))
     last_notified: float | None = None
     if raw.get("last_notified_percent") is not None:
         try:

@@ -76,11 +76,25 @@ def _format_moscow_time(when: datetime) -> str:
     return format_moscow(when, fmt="%d.%m.%Y %H:%M")
 
 
-def _sec_per_percent(points: list[tuple[str, float]]) -> float | None:
+def _normalize_charging_point(
+    point: tuple[str, float, float | None] | tuple[str, float] | list[object],
+) -> tuple[str, float, float | None]:
+    ts = str(point[0])
+    soc = float(point[1])
+    temp: float | None = None
+    if len(point) >= 3 and point[2] is not None:
+        try:
+            temp = float(point[2])  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            temp = None
+    return ts, soc, temp
+
+
+def _sec_per_percent(points: list[tuple[str, float, float | None]]) -> float | None:
     if len(points) < 2:
         return None
-    first_ts, first_soc = points[0]
-    last_ts, last_soc = points[-1]
+    first_ts, first_soc, _ = _normalize_charging_point(points[0])
+    last_ts, last_soc, _ = _normalize_charging_point(points[-1])
     delta_soc = last_soc - first_soc
     if delta_soc <= 0:
         return None
@@ -93,7 +107,7 @@ def _sec_per_percent(points: list[tuple[str, float]]) -> float | None:
 
 
 def _charging_metrics(
-    points: list[tuple[str, float]],
+    points: list[tuple[str, float, float | None]],
     *,
     current_soc: float,
     max_percent: float,
@@ -115,20 +129,26 @@ def _build_charging_notification(
     car: str,
     current_soc: float,
     max_percent: float,
-    points: list[tuple[str, float]],
+    points: list[tuple[str, float, float | None]],
     now: datetime,
+    battery_temp_c: float | None = None,
     final: bool = False,
 ) -> AlertNotification:
+    normalized = [_normalize_charging_point(point) for point in points]
     sec_per_pct, eta, finish = _charging_metrics(
-        points,
+        normalized,
         current_soc=current_soc,
         max_percent=max_percent,
         now=now,
     )
 
-    parsed_points = [(parse_point_timestamp(ts), soc) for ts, soc in points]
+    parsed_points = [
+        (parse_point_timestamp(ts), soc, temp) for ts, soc, temp in normalized
+    ]
 
     lines = [f"⚡ {car} — зарядка", f"Заряд: {current_soc:g}%"]
+    if battery_temp_c is not None:
+        lines.append(f"Темп. АКБ: {battery_temp_c:g} °C")
     if sec_per_pct is not None:
         lines.append(f"Скорость: ~{_format_duration(sec_per_pct)} на 1%")
     if eta is not None and finish is not None and current_soc < max_percent:
@@ -196,6 +216,7 @@ def _evaluate_charging(
 
     max_percent = config.charging.normalized_max()
     trigger = config.charging.normalized_trigger()
+    battery_temp = telemetry.battery_temp_c
     now = telemetry.captured_at
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
@@ -210,15 +231,20 @@ def _evaluate_charging(
         session.active = True
         session.last_notified_percent = soc
         session.last_seen_percent = soc
-        session.points = [(ts, soc)]
+        session.points = [(ts, soc, battery_temp)]
         return messages
 
     if _charging_stopped(telemetry, session):
         state.charging_sessions.pop(vehicle_key, None)
         return messages
 
-    if not session.points or session.points[-1][1] != soc or session.points[-1][0] != ts:
-        session.points.append((ts, soc))
+    if (
+        not session.points
+        or _normalize_charging_point(session.points[-1])[1] != soc
+        or _normalize_charging_point(session.points[-1])[0] != ts
+        or _normalize_charging_point(session.points[-1])[2] != battery_temp
+    ):
+        session.points.append((ts, soc, battery_temp))
     session.last_seen_percent = soc
 
     if soc >= max_percent:
@@ -229,6 +255,7 @@ def _evaluate_charging(
                 max_percent=max_percent,
                 points=session.points,
                 now=now,
+                battery_temp_c=battery_temp,
                 final=True,
             )
         )
@@ -244,6 +271,7 @@ def _evaluate_charging(
                 max_percent=max_percent,
                 points=session.points,
                 now=now,
+                battery_temp_c=battery_temp,
             )
         )
         session.last_notified_percent = soc

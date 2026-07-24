@@ -17,6 +17,7 @@ def _telemetry(
     *,
     battery: float | None = None,
     charging: bool | None = None,
+    battery_temp_c: float | None = None,
     captured_at: datetime | None = None,
     vehicle_id: str = "car1",
 ) -> VehicleTelemetry:
@@ -25,6 +26,7 @@ def _telemetry(
         name="ФРИ / FREE",
         battery_percent=battery,
         is_charging=charging,
+        battery_temp_c=battery_temp_c,
         captured_at=captured_at or datetime(2026, 6, 16, 10, 0, tzinfo=UTC),
     )
 
@@ -53,14 +55,15 @@ def test_charging_triggers_on_trigger_increase() -> None:
         last_notified_percent=40.0,
         last_seen_percent=40.0,
         points=[
-            ("2026-06-16T10:00:00+00:00", 40.0),
-            ("2026-06-16T10:30:00+00:00", 42.0),
+            ("2026-06-16T10:00:00+00:00", 40.0, 22.0),
+            ("2026-06-16T10:30:00+00:00", 42.0, 24.0),
         ],
     )
     messages, state = evaluate_alerts(
         _telemetry(
             battery=45,
             charging=True,
+            battery_temp_c=26.5,
             captured_at=datetime(2026, 6, 16, 11, 0, tzinfo=UTC),
         ),
         config,
@@ -68,12 +71,14 @@ def test_charging_triggers_on_trigger_increase() -> None:
     assert len(messages) == 1
     assert messages[0].kind == "charge_progress"
     assert "45%" in messages[0].text
+    assert "Темп. АКБ: 26.5 °C" in messages[0].text
     assert "Скорость:" in messages[0].text
     assert "До 95%" in messages[0].text
     assert "Окончание (~МСК):" in messages[0].text
     assert messages[0].photo_png is not None
     assert len(messages[0].photo_png) > 1000
     assert state.charging_sessions["car1"].last_notified_percent == 45.0
+    assert state.charging_sessions["car1"].points[-1][2] == 26.5
 
 
 def test_charging_no_alert_below_trigger() -> None:
@@ -82,7 +87,7 @@ def test_charging_no_alert_below_trigger() -> None:
         active=True,
         last_notified_percent=40.0,
         last_seen_percent=40.0,
-        points=[("2026-06-16T10:00:00+00:00", 40.0)],
+        points=[("2026-06-16T10:00:00+00:00", 40.0, None)],
     )
     messages, _ = evaluate_alerts(_telemetry(battery=43, charging=True), config)
     assert messages == []
@@ -95,14 +100,18 @@ def test_charging_completes_at_max_percent() -> None:
         last_notified_percent=90.0,
         last_seen_percent=90.0,
         points=[
-            ("2026-06-16T10:00:00+00:00", 80.0),
-            ("2026-06-16T11:00:00+00:00", 90.0),
+            ("2026-06-16T10:00:00+00:00", 80.0, 20.0),
+            ("2026-06-16T11:00:00+00:00", 90.0, 28.0),
         ],
     )
-    messages, state = evaluate_alerts(_telemetry(battery=95, charging=True), config)
+    messages, state = evaluate_alerts(
+        _telemetry(battery=95, charging=True, battery_temp_c=30.0),
+        config,
+    )
     assert len(messages) == 1
     assert messages[0].kind == "charge_complete"
     assert "95%" in messages[0].text
+    assert "Темп. АКБ: 30 °C" in messages[0].text
     assert "car1" not in state.charging_sessions
 
 
@@ -112,7 +121,7 @@ def test_charging_resets_when_stopped() -> None:
         active=True,
         last_notified_percent=50.0,
         last_seen_percent=55.0,
-        points=[("2026-06-16T10:00:00+00:00", 50.0)],
+        points=[("2026-06-16T10:00:00+00:00", 50.0, None)],
     )
     messages, state = evaluate_alerts(_telemetry(battery=54, charging=False), config)
     assert messages == []
@@ -154,13 +163,24 @@ def test_charging_detected_by_soc_increase() -> None:
 def test_render_charging_chart_returns_png() -> None:
     start = datetime(2026, 6, 16, 10, 0, tzinfo=UTC)
     points = [
-        (start, 40.0),
-        (start + timedelta(minutes=30), 45.0),
+        (start, 40.0, 18.0),
+        (start + timedelta(minutes=30), 45.0, 22.0),
     ]
     png = render_charging_chart(
         points,
         max_percent=95,
         forecast_end=start + timedelta(hours=2),
+        current_soc=45.0,
+    )
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_render_charging_chart_without_temp_still_works() -> None:
+    start = datetime(2026, 6, 16, 10, 0, tzinfo=UTC)
+    png = render_charging_chart(
+        [(start, 40.0), (start + timedelta(minutes=30), 45.0)],
+        max_percent=95,
+        forecast_end=None,
         current_soc=45.0,
     )
     assert png[:8] == b"\x89PNG\r\n\x1a\n"

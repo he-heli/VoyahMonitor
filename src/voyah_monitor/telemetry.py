@@ -21,6 +21,7 @@ class VehicleTelemetry(BaseModel):
     course_deg: float | None = None
     soh_percent: float | None = None
     v12_voltage: float | None = None
+    battery_temp_c: float | None = None
     is_online: bool | None = None
     location_sharing: bool | None = None
     status: str | None = None

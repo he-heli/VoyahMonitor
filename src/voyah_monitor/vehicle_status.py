@@ -395,6 +395,7 @@ def dashboard_item_to_telemetry(item: dict[str, Any]) -> "VehicleTelemetry":
         course_deg=_to_float(metrics.get("course", geo.get("course"))),
         soh_percent=_to_float(metrics.get("soh")),
         v12_voltage=_to_float(metrics.get("12VBatteryVoltage")),
+        battery_temp_c=_to_float(metrics.get("batteryTemp")),
         is_online=_to_bool(tbox.get("isOnline")) if tbox else None,
         location_sharing=_to_bool(table.get("locationStatus", detail.get("locationStatus"))),
         status=_status_chip(tbox),
