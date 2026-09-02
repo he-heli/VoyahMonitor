@@ -66,10 +66,13 @@ from voyah_monitor.config import Settings
 from voyah_monitor.history_export import export_filename, export_history_xlsx_to_path, period_label
 from voyah_monitor.scheduling import next_poll_delay_seconds
 from voyah_monitor.session_expiry import (
+    REVOKED_MARKER,
     exp_key,
     format_session_expiry_message,
+    format_session_revoked_message,
     load_refresh_expires_at,
     should_notify_session_expiry,
+    should_notify_session_revoked,
 )
 from voyah_monitor.session_manager import SessionExpiredError
 from voyah_monitor.storage import TelemetryStorage
@@ -137,6 +140,42 @@ def _fetch_and_save(settings: Settings, storage: TelemetryStorage) -> list[Vehic
     for telemetry in telemetries:
         storage.save_snapshot(telemetry)
     return telemetries
+
+
+async def _dispatch_session_revoked_alert(
+    bot: Bot,
+    settings: Settings,
+    runtime: BotRuntimeConfig,
+) -> None:
+    """Notify once when VOYAH rejects refresh (even if JWT exp is still in the future)."""
+    user_ids = settings.telegram_user_ids
+    if not user_ids:
+        return
+
+    expires_at = await asyncio.to_thread(
+        load_refresh_expires_at,
+        settings.voyah_session_path,
+        settings.voyah_base_url,
+    )
+    key = exp_key(expires_at) if expires_at is not None else "unknown"
+    already = list(runtime.session_expiry_notified.get(key, []))
+    if not should_notify_session_revoked(already):
+        return
+
+    text = format_session_revoked_message(expires_at=expires_at)
+    for user_id in user_ids:
+        try:
+            await bot.send_message(user_id, text)
+        except Exception:
+            logger.exception(
+                "Failed to send session-revoked alert to user %s",
+                user_id,
+            )
+
+    already.append(REVOKED_MARKER)
+    runtime.session_expiry_notified[key] = sorted(set(already))
+    runtime.save()
+    logger.info("Session-revoked alert sent (key=%s)", key)
 
 
 async def _dispatch_session_expiry_reminders(
@@ -751,6 +790,12 @@ async def run_bot(settings: Settings) -> None:
             try:
                 telemetries = await asyncio.to_thread(_fetch_and_save, settings, storage)
                 await _dispatch_alert_notifications(bot, settings, runtime, telemetries)
+            except SessionExpiredError:
+                logger.exception("Periodic telemetry collection failed: session expired")
+                try:
+                    await _dispatch_session_revoked_alert(bot, settings, runtime)
+                except Exception:
+                    logger.exception("Failed to dispatch session-revoked alert")
             except Exception:
                 logger.exception("Periodic telemetry collection failed")
 

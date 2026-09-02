@@ -8,6 +8,8 @@ from voyah_monitor.timeutil import format_moscow, moscow_now, to_moscow
 
 REMINDER_DAYS = frozenset({1, 2, 3})
 NOTIFY_HOUR_MSK = 10
+# Stored in session_expiry_notified[exp_key] when server already rejected refresh.
+REVOKED_MARKER = -1
 
 
 def refresh_token_expires_at(session: dict[str, Any], base_url: str) -> datetime | None:
@@ -63,6 +65,29 @@ def format_session_expiry_message(days_left: int, expires_at: datetime) -> str:
         f"Нужен повторный login на ПК и обновление session.json на VPS:\n"
         f"./scripts/local-login.sh → scp data/session.json → restart бота."
     )
+
+
+def format_session_revoked_message(*, expires_at: datetime | None) -> str:
+    lines = [
+        "🚫 Сессия VOYAH недействительна.",
+        "Сервер отклонил refresh token (истёк или отозван).",
+    ]
+    if expires_at is not None:
+        when = format_moscow(expires_at, fmt="%d.%m.%Y %H:%M")
+        lines.append(
+            f"В JWT ещё указан срок до {when} МСК — на него нельзя полагаться."
+        )
+    lines.extend(
+        [
+            "Нужен повторный login на ПК и обновление session.json на VPS:",
+            "./scripts/local-login.sh → scp data/session.json → restart бота.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def should_notify_session_revoked(notified_for_exp: list[int]) -> bool:
+    return REVOKED_MARKER not in notified_for_exp
 
 
 def load_refresh_expires_at(session_path, base_url: str) -> datetime | None:

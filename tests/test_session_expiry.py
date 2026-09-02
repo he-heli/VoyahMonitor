@@ -3,9 +3,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from voyah_monitor.session_expiry import (
+    REVOKED_MARKER,
     days_until_expiry,
     format_session_expiry_message,
+    format_session_revoked_message,
     should_notify_session_expiry,
+    should_notify_session_revoked,
 )
 
 
@@ -70,3 +73,15 @@ def test_days_left_one_and_two() -> None:
         )
         == 2
     )
+
+
+def test_session_revoked_notify_once() -> None:
+    assert should_notify_session_revoked([]) is True
+    assert should_notify_session_revoked([3, 2]) is True
+    assert should_notify_session_revoked([REVOKED_MARKER]) is False
+    text = format_session_revoked_message(
+        expires_at=datetime(2026, 11, 28, 20, 40, 12, tzinfo=UTC)
+    )
+    assert "недействительна" in text
+    assert "28.11.2026 23:40 МСК" in text
+    assert "local-login" in text
