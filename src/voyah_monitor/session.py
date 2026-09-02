@@ -97,14 +97,22 @@ def refresh_token_from_session(session: dict[str, Any], base_url: str) -> str | 
 
 
 def token_expires_at(token: str) -> datetime | None:
+    return _token_claim_time(token, "exp")
+
+
+def token_issued_at(token: str) -> datetime | None:
+    return _token_claim_time(token, "iat")
+
+
+def _token_claim_time(token: str, claim: str) -> datetime | None:
     try:
         payload = token.split(".")[1]
         payload += "=" * (-len(payload) % 4)
         claims = json.loads(base64.urlsafe_b64decode(payload))
-        exp = claims.get("exp")
-        if exp is None:
+        value = claims.get(claim)
+        if value is None:
             return None
-        return datetime.fromtimestamp(int(exp), UTC)
+        return datetime.fromtimestamp(int(value), UTC)
     except (IndexError, ValueError, TypeError, json.JSONDecodeError):
         return None
 

@@ -68,10 +68,10 @@ from voyah_monitor.scheduling import next_poll_delay_seconds
 from voyah_monitor.session_expiry import (
     REVOKED_MARKER,
     exp_key,
-    format_session_expiry_message,
     format_session_revoked_message,
     load_refresh_expires_at,
-    should_notify_session_expiry,
+    load_refresh_issued_at,
+    pick_session_reminder,
     should_notify_session_revoked,
 )
 from voyah_monitor.session_manager import SessionExpiredError
@@ -195,30 +195,36 @@ async def _dispatch_session_expiry_reminders(
     if expires_at is None:
         return
 
+    issued_at = await asyncio.to_thread(
+        load_refresh_issued_at,
+        settings.voyah_session_path,
+        settings.voyah_base_url,
+    )
+
     key = exp_key(expires_at)
     already = list(runtime.session_expiry_notified.get(key, []))
-    days_left = should_notify_session_expiry(
+    reminder = pick_session_reminder(
         expires_at=expires_at,
+        issued_at=issued_at,
         notified_for_exp=already,
     )
-    if days_left is None:
+    if reminder is None:
         return
 
-    text = format_session_expiry_message(days_left, expires_at)
     for user_id in user_ids:
         try:
-            await bot.send_message(user_id, text)
+            await bot.send_message(user_id, reminder.text)
         except Exception:
             logger.exception(
-                "Failed to send session expiry reminder (%s days) to user %s",
-                days_left,
+                "Failed to send session expiry reminder (%s) to user %s",
+                reminder.log_label,
                 user_id,
             )
 
-    already.append(days_left)
+    already.append(reminder.notify_key)
     runtime.session_expiry_notified[key] = sorted(set(already))
     runtime.save()
-    logger.info("Session expiry reminder sent: %s days left", days_left)
+    logger.info("Session expiry reminder sent: %s", reminder.log_label)
 
 
 async def _dispatch_alert_notifications(
@@ -800,7 +806,10 @@ async def run_bot(settings: Settings) -> None:
                 logger.exception("Periodic telemetry collection failed")
 
     async def periodic_session_expiry_check() -> None:
-        logger.info("Session expiry reminders: hourly check from 10:00 MSK (3/2/1 days)")
+        logger.info(
+            "Session expiry reminders: hourly from 10:00 MSK "
+            "(age 40/42/44d + JWT 7/3/2/1d left)"
+        )
         while True:
             try:
                 await _dispatch_session_expiry_reminders(bot, settings, runtime)
