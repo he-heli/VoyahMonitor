@@ -18,14 +18,20 @@ fi
 # shellcheck source=/dev/null
 source .venv/bin/activate
 
-python -m pip install -q -U pip
-python -m pip install -q -e ".[login]"
-playwright install chromium
+# Prefer venv python3 — bare `python` is often missing on macOS Homebrew.
+PY="${VIRTUAL_ENV}/bin/python3"
+if [[ ! -x "${PY}" ]]; then
+  PY="$(command -v python3)"
+fi
+
+"${PY}" -m pip install -q -U pip
+"${PY}" -m pip install -q -e ".[login]"
+"${PY}" -m playwright install chromium
 
 mkdir -p data
 
 echo "Starting VOYAH login (session → data/session.json) ..."
-python scripts/local_login.py
+"${PY}" scripts/local_login.py
 
 echo ""
 echo "Next steps:"

@@ -172,6 +172,39 @@ def test_voyah_api_blocks_control_paths() -> None:
     VoyahReadOnlyApi._assert_safe_get_path(
         "/car-service/tbox/69aab8fe2f8bbd597e85ebf2/info"
     )
+    VoyahReadOnlyApi._assert_safe_get_path(
+        "/client-bff-service/telemetry/863151073972645"
+    )
+    with pytest.raises(ReadOnlyViolationError):
+        VoyahReadOnlyApi._assert_safe_get_path("/client-bff-service/telemetry/not-an-imei")
+
+
+def test_normalize_bff_to_tbox_maps_carv2_fields() -> None:
+    tbox = VoyahReadOnlyApi.normalize_bff_to_tbox(
+        {
+            "isOnline": True,
+            "onlineState": "connected",
+            "sensors": {
+                "batteryPercentage": "40",
+                "fuelPercentage": "93",
+                "remainsBatteryMileage": "62",
+                "remainsFuelMileage": "359",
+                "odometer": "4061",
+                "12VBatteryVoltage": "12.87",
+                "trunkStatus": False,
+                "isCentralLockingOn": True,
+                "lat": "55.75",
+                "lon": "48.74",
+                "isOnline": True,
+            },
+            "buttons": [],
+        }
+    )
+    assert tbox["isOnline"] is True
+    assert tbox["sensors"]["chip"]["title"] == "Доступен"
+    assert tbox["sensors"]["sensorsData"]["batteryPercentage"] == 40
+    assert tbox["sensors"]["sensorsData"]["trunkStatus"] == 0
+    assert tbox["isCentralLockingOn"] is True
 
 
 def test_format_dashboard_status_matches_site_sections() -> None:

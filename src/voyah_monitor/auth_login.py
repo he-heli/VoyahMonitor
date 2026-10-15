@@ -59,6 +59,28 @@ async def _ensure_chromium_installed(playwright) -> None:
         raise SystemExit(1)
 
 
+async def _launch_browser(playwright):
+    """Prefer system Chrome — Yandex SmartCaptcha often blocks Playwright Chromium."""
+    launch_kwargs = {"headless": False}
+    last_error: Exception | None = None
+    for channel in ("chrome", "chrome-beta", "msedge", None):
+        try:
+            if channel:
+                return await playwright.chromium.launch(channel=channel, **launch_kwargs)
+            await _ensure_chromium_installed(playwright)
+            return await playwright.chromium.launch(**launch_kwargs)
+        except PlaywrightError as exc:
+            last_error = exc
+            continue
+    print(
+        "Failed to launch a browser for login.\n"
+        "Install Google Chrome, or run: playwright install chromium\n"
+        f"Details: {last_error}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1) from last_error
+
+
 async def run_interactive_login(settings: Settings) -> None:
     capture = NetworkCapture(
         base_url=settings.voyah_base_url,
@@ -67,17 +89,7 @@ async def run_interactive_login(settings: Settings) -> None:
     pending: dict[str, CapturedRequest] = {}
 
     async with async_playwright() as playwright:
-        await _ensure_chromium_installed(playwright)
-        try:
-            browser = await playwright.chromium.launch(headless=False)
-        except PlaywrightError as exc:
-            print(
-                "Failed to launch Chromium.\n"
-                "If Playwright was just installed, run: playwright install chromium\n"
-                f"Details: {exc}",
-                file=sys.stderr,
-            )
-            raise SystemExit(1) from exc
+        browser = await _launch_browser(playwright)
         context = await browser.new_context()
         page = await context.new_page()
 
@@ -126,9 +138,25 @@ async def run_interactive_login(settings: Settings) -> None:
         print("=== VOYAH login ===")
         print("1. Enter your phone number on the page.")
         print("2. Accept personal data consent if required.")
-        print("3. Complete SmartCaptcha manually if it appears.")
+        print("3. Wait for SmartCaptcha (invisible). If the SMS button does nothing,")
+        print("   captcha has not issued a token yet — refresh the page or solve the challenge.")
         print("4. Click 'Get SMS code' and wait for the SMS.")
         print()
+        # Site silently no-ops the SMS button when captcha token is missing.
+        try:
+            await page.wait_for_function(
+                """() => {
+                  const el = document.querySelector('.smart-captcha iframe, iframe[src*="captcha"]');
+                  return !!el || !!document.querySelector('.smart-captcha');
+                }""",
+                timeout=15000,
+            )
+        except Exception:
+            print(
+                "Warning: SmartCaptcha widget not detected yet. "
+                "SMS button may appear clickable but do nothing until captcha loads.",
+                file=sys.stderr,
+            )
 
         phone = settings.voyah_phone.strip()
         if phone and phone != "+7":

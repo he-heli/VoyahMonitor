@@ -45,8 +45,15 @@ def _humanize_recency(value: Any) -> str | None:
     if not value:
         return None
     try:
-        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        delta = datetime.now(UTC) - dt.astimezone(UTC)
+        if isinstance(value, (int, float)) or (isinstance(value, str) and value.isdigit()):
+            ts = float(value)
+            # BFF sends epoch milliseconds (e.g. 1792077019333).
+            if ts > 1e12:
+                ts /= 1000.0
+            dt = datetime.fromtimestamp(ts, tz=UTC)
+        else:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(UTC)
+        delta = datetime.now(UTC) - dt
         seconds = int(delta.total_seconds())
         if seconds < 0:
             return "только что"
@@ -60,7 +67,7 @@ def _humanize_recency(value: Any) -> str | None:
             return f"{hours} часов назад"
         days = max(1, seconds // 86400)
         return f"{days} дней назад"
-    except ValueError:
+    except (ValueError, OSError, OverflowError):
         return str(value)
 
 
@@ -172,11 +179,16 @@ def _collect_metrics(
                 metrics["lastSensorsRecieved"] = sensors.get("lastSensorsRecieved")
 
     if isinstance(tbox, dict):
-        tbox_sensors = tbox.get("sensors")
+        # /tbox/{id}/info nests under sensors.*; /tbox/{id}/sensors is flatter.
+        tbox_sensors = tbox.get("sensors") if isinstance(tbox.get("sensors"), dict) else tbox
         if isinstance(tbox_sensors, dict):
             sensors_data = tbox_sensors.get("sensorsData")
             if isinstance(sensors_data, dict):
                 metrics.update(sensors_data)
+            if tbox_sensors.get("lastPing"):
+                metrics["lastPing"] = tbox_sensors.get("lastPing")
+            if tbox_sensors.get("lastSensorsRecieved"):
+                metrics["lastSensorsRecieved"] = tbox_sensors.get("lastSensorsRecieved")
             position = tbox_sensors.get("positionData")
             if isinstance(position, dict):
                 if position.get("speed") is not None:
@@ -197,6 +209,12 @@ def _collect_metrics(
     if geo.get("course") is not None and metrics.get("course") is None:
         metrics["course"] = geo.get("course")
 
+    # carV2 UI aliases (same values, new names).
+    if metrics.get("remainsMileageFuel") is None and metrics.get("remainsFuelMileage") is not None:
+        metrics["remainsMileageFuel"] = metrics["remainsFuelMileage"]
+    if metrics.get("remainsMileage") is None and metrics.get("remainsBatteryMileage") is not None:
+        metrics["remainsMileage"] = metrics["remainsBatteryMileage"]
+
     return metrics
 
 
@@ -213,11 +231,21 @@ def _status_chip(tbox: dict[str, Any] | None) -> str | None:
 
 
 def _recency_from_sources(*sources: dict[str, Any], metrics: dict[str, Any]) -> str | None:
-    for source in sources:
-        value = source.get("lastSensorRequest") or source.get("lastSensorsRecieved")
+    # Prefer actual received/ping timestamps. lastSensorRequest only means "we asked",
+    # and stays fresh even when the car is offline with empty sensorsData.
+    for key in ("lastSensorsRecieved", "lastPing"):
+        for source in sources:
+            value = source.get(key)
+            if value:
+                return _humanize_recency(value)
+        value = metrics.get(key)
         if value:
             return _humanize_recency(value)
-    return _humanize_recency(metrics.get("lastSensorsRecieved"))
+    for source in sources:
+        value = source.get("lastSensorRequest")
+        if value:
+            return _humanize_recency(value)
+    return None
 
 
 def _table_fields(
@@ -425,7 +453,8 @@ def _control_state_fields(tbox: dict[str, Any] | None) -> dict[str, Any]:
         )
     )
 
-    cooling_active = (metrics.get("climateFanSpeed") or 0) > 0 or bool(metrics.get("airingStatus"))
+    fan_speed = _to_float(metrics.get("climateFanSpeed")) or 0.0
+    cooling_active = fan_speed > 0 or bool(metrics.get("airingStatus"))
 
     return {
         "Прогрев": _on_off_label(
